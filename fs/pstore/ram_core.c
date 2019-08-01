@@ -36,6 +36,10 @@ struct persistent_ram_buffer {
 	uint8_t     data[0];
 };
 
+#ifdef __aarch64__
+#define memcpy memcpy_toio
+#endif
+
 #define PERSISTENT_RAM_SIG (0x43474244) /* DBGC */
 
 static inline size_t buffer_size(struct persistent_ram_zone *prz)
@@ -49,14 +53,48 @@ static inline size_t buffer_start(struct persistent_ram_zone *prz)
 }
 
 /* increase and wrap the start pointer, returning the old value */
-static size_t buffer_start_add(struct persistent_ram_zone *prz, size_t a)
+static size_t buffer_start_add_atomic(struct persistent_ram_zone *prz, size_t a)
 {
 	int old;
 	int new;
-	unsigned long flags = 0;
 
-	if (!(prz->flags & PRZ_FLAG_NO_LOCK))
-		raw_spin_lock_irqsave(&prz->buffer_lock, flags);
+	do {
+		old = atomic_read(&prz->buffer->start);
+		new = old + a;
+		while (unlikely(new >= prz->buffer_size))
+			new -= prz->buffer_size;
+	} while (atomic_cmpxchg(&prz->buffer->start, old, new) != old);
+
+	return old;
+}
+
+/* increase the size counter until it hits the max size */
+static void buffer_size_add_atomic(struct persistent_ram_zone *prz, size_t a)
+{
+	size_t old;
+	size_t new;
+
+	if (atomic_read(&prz->buffer->size) == prz->buffer_size)
+		return;
+
+	do {
+		old = atomic_read(&prz->buffer->size);
+		new = old + a;
+		if (new > prz->buffer_size)
+			new = prz->buffer_size;
+	} while (atomic_cmpxchg(&prz->buffer->size, old, new) != old);
+}
+
+static DEFINE_RAW_SPINLOCK(buffer_lock);
+
+/* increase and wrap the start pointer, returning the old value */
+static size_t buffer_start_add_locked(struct persistent_ram_zone *prz, size_t a)
+{
+	int old;
+	int new;
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&buffer_lock, flags);
 
 	old = atomic_read(&prz->buffer->start);
 	new = old + a;
@@ -64,21 +102,19 @@ static size_t buffer_start_add(struct persistent_ram_zone *prz, size_t a)
 		new -= prz->buffer_size;
 	atomic_set(&prz->buffer->start, new);
 
-	if (!(prz->flags & PRZ_FLAG_NO_LOCK))
-		raw_spin_unlock_irqrestore(&prz->buffer_lock, flags);
+	raw_spin_unlock_irqrestore(&buffer_lock, flags);
 
 	return old;
 }
 
 /* increase the size counter until it hits the max size */
-static void buffer_size_add(struct persistent_ram_zone *prz, size_t a)
+static void buffer_size_add_locked(struct persistent_ram_zone *prz, size_t a)
 {
 	size_t old;
 	size_t new;
-	unsigned long flags = 0;
+	unsigned long flags;
 
-	if (!(prz->flags & PRZ_FLAG_NO_LOCK))
-		raw_spin_lock_irqsave(&prz->buffer_lock, flags);
+	raw_spin_lock_irqsave(&buffer_lock, flags);
 
 	old = atomic_read(&prz->buffer->size);
 	if (old == prz->buffer_size)
@@ -90,31 +126,34 @@ static void buffer_size_add(struct persistent_ram_zone *prz, size_t a)
 	atomic_set(&prz->buffer->size, new);
 
 exit:
-	if (!(prz->flags & PRZ_FLAG_NO_LOCK))
-		raw_spin_unlock_irqrestore(&prz->buffer_lock, flags);
+	raw_spin_unlock_irqrestore(&buffer_lock, flags);
 }
+
+static size_t (*buffer_start_add)(struct persistent_ram_zone *, size_t) = buffer_start_add_atomic;
+static void (*buffer_size_add)(struct persistent_ram_zone *, size_t) = buffer_size_add_atomic;
 
 static void notrace persistent_ram_encode_rs8(struct persistent_ram_zone *prz,
 	uint8_t *data, size_t len, uint8_t *ecc)
 {
 	int i;
+	uint16_t par[prz->ecc_info.ecc_size];
 
 	/* Initialize the parity buffer */
-	memset(prz->ecc_info.par, 0,
-	       prz->ecc_info.ecc_size * sizeof(prz->ecc_info.par[0]));
-	encode_rs8(prz->rs_decoder, data, len, prz->ecc_info.par, 0);
+	memset(par, 0, sizeof(par));
+	encode_rs8(prz->rs_decoder, data, len, par, 0);
 	for (i = 0; i < prz->ecc_info.ecc_size; i++)
-		ecc[i] = prz->ecc_info.par[i];
+		ecc[i] = par[i];
 }
 
 static int persistent_ram_decode_rs8(struct persistent_ram_zone *prz,
 	void *data, size_t len, uint8_t *ecc)
 {
 	int i;
+	uint16_t par[prz->ecc_info.ecc_size];
 
 	for (i = 0; i < prz->ecc_info.ecc_size; i++)
-		prz->ecc_info.par[i] = ecc[i];
-	return decode_rs8(prz->rs_decoder, data, prz->ecc_info.par, len,
+		par[i] = ecc[i];
+	return decode_rs8(prz->rs_decoder, data, par, len,
 				NULL, 0, NULL, 0, NULL);
 }
 
@@ -227,15 +266,6 @@ static int persistent_ram_init_ecc(struct persistent_ram_zone *prz,
 		return -EINVAL;
 	}
 
-	/* allocate workspace instead of using stack VLA */
-	prz->ecc_info.par = kmalloc_array(prz->ecc_info.ecc_size,
-					  sizeof(*prz->ecc_info.par),
-					  GFP_KERNEL);
-	if (!prz->ecc_info.par) {
-		pr_err("cannot allocate ECC parity workspace\n");
-		return -ENOMEM;
-	}
-
 	prz->corrected_bytes = 0;
 	prz->bad_blocks = 0;
 
@@ -274,7 +304,7 @@ static void notrace persistent_ram_update(struct persistent_ram_zone *prz,
 	const void *s, unsigned int start, unsigned int count)
 {
 	struct persistent_ram_buffer *buffer = prz->buffer;
-	memcpy_toio(buffer->data + start, s, count);
+	memcpy(buffer->data + start, s, count);
 	persistent_ram_update_ecc(prz, start, count);
 }
 
@@ -307,8 +337,8 @@ void persistent_ram_save_old(struct persistent_ram_zone *prz)
 	}
 
 	prz->old_log_size = size;
-	memcpy_fromio(prz->old_log, &buffer->data[start], size - start);
-	memcpy_fromio(prz->old_log + size - start, &buffer->data[0], start);
+	memcpy(prz->old_log, &buffer->data[start], size - start);
+	memcpy(prz->old_log + size - start, &buffer->data[0], start);
 }
 
 int notrace persistent_ram_write(struct persistent_ram_zone *prz,
@@ -429,35 +459,28 @@ static void *persistent_ram_vmap(phys_addr_t start, size_t size,
 	vaddr = vmap(pages, page_count, VM_MAP, prot);
 	kfree(pages);
 
-	/*
-	 * Since vmap() uses page granularity, we must add the offset
-	 * into the page here, to get the byte granularity address
-	 * into the mapping to represent the actual "start" location.
-	 */
-	return vaddr + offset_in_page(start);
+	return vaddr;
 }
 
 static void *persistent_ram_iomap(phys_addr_t start, size_t size,
-		unsigned int memtype, char *label)
+		unsigned int memtype)
 {
 	void *va;
 
-	if (!request_mem_region(start, size, label ?: "ramoops")) {
+	if (!request_mem_region(start, size, "persistent_ram")) {
 		pr_err("request mem region (0x%llx@0x%llx) failed\n",
 			(unsigned long long)size, (unsigned long long)start);
 		return NULL;
 	}
+
+	buffer_start_add = buffer_start_add_locked;
+	buffer_size_add = buffer_size_add_locked;
 
 	if (memtype)
 		va = ioremap(start, size);
 	else
 		va = ioremap_wc(start, size);
 
-	/*
-	 * Since request_mem_region() and ioremap() are byte-granularity
-	 * there is no need handle anything special like we do when the
-	 * vmap() case in persistent_ram_vmap() above.
-	 */
 	return va;
 }
 
@@ -470,8 +493,7 @@ static int persistent_ram_buffer_map(phys_addr_t start, phys_addr_t size,
 	if (pfn_valid(start >> PAGE_SHIFT))
 		prz->vaddr = persistent_ram_vmap(start, size, memtype);
 	else
-		prz->vaddr = persistent_ram_iomap(start, size, memtype,
-						  prz->label);
+		prz->vaddr = persistent_ram_iomap(start, size, memtype);
 
 	if (!prz->vaddr) {
 		pr_err("%s: Failed to map 0x%llx pages at 0x%llx\n", __func__,
@@ -479,7 +501,7 @@ static int persistent_ram_buffer_map(phys_addr_t start, phys_addr_t size,
 		return -ENOMEM;
 	}
 
-	prz->buffer = prz->vaddr;
+	prz->buffer = prz->vaddr + offset_in_page(start);
 	prz->buffer_size = size - sizeof(struct persistent_ram_buffer);
 
 	return 0;
@@ -512,7 +534,6 @@ static int persistent_ram_post_init(struct persistent_ram_zone *prz, u32 sig,
 			 prz->buffer->sig);
 	}
 
-	/* Rewind missing or invalid memory area. */
 	prz->buffer->sig = sig;
 	persistent_ram_zap(prz);
 
@@ -526,29 +547,20 @@ void persistent_ram_free(struct persistent_ram_zone *prz)
 
 	if (prz->vaddr) {
 		if (pfn_valid(prz->paddr >> PAGE_SHIFT)) {
-			/* We must vunmap() at page-granularity. */
-			vunmap(prz->vaddr - offset_in_page(prz->paddr));
+			vunmap(prz->vaddr);
 		} else {
 			iounmap(prz->vaddr);
 			release_mem_region(prz->paddr, prz->size);
 		}
 		prz->vaddr = NULL;
 	}
-	if (prz->rs_decoder) {
-		free_rs(prz->rs_decoder);
-		prz->rs_decoder = NULL;
-	}
-	kfree(prz->ecc_info.par);
-	prz->ecc_info.par = NULL;
-
 	persistent_ram_free_old(prz);
-	kfree(prz->label);
 	kfree(prz);
 }
 
 struct persistent_ram_zone *persistent_ram_new(phys_addr_t start, size_t size,
 			u32 sig, struct persistent_ram_ecc_info *ecc_info,
-			unsigned int memtype, u32 flags, char *label)
+			unsigned int memtype)
 {
 	struct persistent_ram_zone *prz;
 	int ret = -ENOMEM;
@@ -558,11 +570,6 @@ struct persistent_ram_zone *persistent_ram_new(phys_addr_t start, size_t size,
 		pr_err("failed to allocate persistent ram zone\n");
 		goto err;
 	}
-
-	/* Initialize general buffer state. */
-	raw_spin_lock_init(&prz->buffer_lock);
-	prz->flags = flags;
-	prz->label = label;
 
 	ret = persistent_ram_buffer_map(start, size, prz, memtype);
 	if (ret)

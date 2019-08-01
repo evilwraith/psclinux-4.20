@@ -70,7 +70,7 @@ static struct scsi_host_template aic94xx_sht = {
 	.max_sectors		= SCSI_DEFAULT_MAX_SECTORS,
 	.use_clustering		= ENABLE_CLUSTERING,
 	.eh_device_reset_handler	= sas_eh_device_reset_handler,
-	.eh_target_reset_handler	= sas_eh_target_reset_handler,
+	.eh_bus_reset_handler	= sas_eh_bus_reset_handler,
 	.target_destroy		= sas_target_destroy,
 	.ioctl			= sas_ioctl,
 	.track_queue_depth	= 1,
@@ -350,7 +350,7 @@ static ssize_t asd_store_update_bios(struct device *dev,
 	int flash_command = FLASH_CMD_NONE;
 	int err = 0;
 
-	cmd_ptr = kcalloc(count, 2, GFP_KERNEL);
+	cmd_ptr = kzalloc(count*2, GFP_KERNEL);
 
 	if (!cmd_ptr) {
 		err = FAIL_OUT_MEMORY;
@@ -703,6 +703,7 @@ static int asd_unregister_sas_ha(struct asd_ha_struct *asd_ha)
 {
 	int err;
 
+	scsi_remove_host(asd_ha->sas_ha.core.shost);
 	err = sas_unregister_ha(&asd_ha->sas_ha);
 
 	sas_remove_host(asd_ha->sas_ha.core.shost);
@@ -771,8 +772,13 @@ static int asd_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		goto Err_remove;
 
 	err = -ENODEV;
-	if (dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(64)) ||
-	    dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32))) {
+	if (!pci_set_dma_mask(dev, DMA_BIT_MASK(64))
+	    && !pci_set_consistent_dma_mask(dev, DMA_BIT_MASK(64)))
+		;
+	else if (!pci_set_dma_mask(dev, DMA_BIT_MASK(32))
+		 && !pci_set_consistent_dma_mask(dev, DMA_BIT_MASK(32)))
+		;
+	else {
 		asd_printk("no suitable DMA mask for %s\n", pci_name(dev));
 		goto Err_remove;
 	}
@@ -951,11 +957,11 @@ static int asd_scan_finished(struct Scsi_Host *shost, unsigned long time)
 	return 1;
 }
 
-static ssize_t version_show(struct device_driver *driver, char *buf)
+static ssize_t asd_version_show(struct device_driver *driver, char *buf)
 {
 	return snprintf(buf, PAGE_SIZE, "%s\n", ASD_DRIVER_VERSION);
 }
-static DRIVER_ATTR_RO(version);
+static DRIVER_ATTR(version, S_IRUGO, asd_version_show, NULL);
 
 static int asd_create_driver_attrs(struct device_driver *driver)
 {
@@ -1025,10 +1031,8 @@ static int __init aic94xx_init(void)
 
 	aic94xx_transport_template =
 		sas_domain_attach_transport(&aic94xx_transport_functions);
-	if (!aic94xx_transport_template) {
-		err = -ENOMEM;
+	if (!aic94xx_transport_template)
 		goto out_destroy_caches;
-	}
 
 	err = pci_register_driver(&aic94xx_pci_driver);
 	if (err)

@@ -27,7 +27,7 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
-#include <linux/platform_data/bh1770glc.h>
+#include <linux/i2c/bh1770glc.h>
 #include <linux/regulator/consumer.h>
 #include <linux/pm_runtime.h>
 #include <linux/workqueue.h>
@@ -179,6 +179,9 @@ static const char reg_vleds[] = "Vleds";
  */
 static const s16 prox_rates_hz[] = {100, 50, 33, 25, 14, 10, 5, 2};
 static const s16 prox_rates_ms[] = {10, 20, 30, 40, 70, 100, 200, 500};
+
+/* Supported IR-led currents in mA */
+static const u8 prox_curr_ma[] = {5, 10, 20, 50, 100, 150, 200};
 
 /*
  * Supported stand alone rates in ms from chip data sheet
@@ -1172,7 +1175,7 @@ static struct attribute *sysfs_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group bh1770_attribute_group = {
+static struct attribute_group bh1770_attribute_group = {
 	.attrs = sysfs_attrs
 };
 
@@ -1320,7 +1323,7 @@ static int bh1770_remove(struct i2c_client *client)
 #ifdef CONFIG_PM_SLEEP
 static int bh1770_suspend(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 	struct bh1770_chip *chip = i2c_get_clientdata(client);
 
 	bh1770_chip_off(chip);
@@ -1330,7 +1333,7 @@ static int bh1770_suspend(struct device *dev)
 
 static int bh1770_resume(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 	struct bh1770_chip *chip = i2c_get_clientdata(client);
 	int ret = 0;
 
@@ -1358,7 +1361,7 @@ static int bh1770_resume(struct device *dev)
 #ifdef CONFIG_PM
 static int bh1770_runtime_suspend(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 	struct bh1770_chip *chip = i2c_get_clientdata(client);
 
 	bh1770_chip_off(chip);
@@ -1368,7 +1371,7 @@ static int bh1770_runtime_suspend(struct device *dev)
 
 static int bh1770_runtime_resume(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 	struct bh1770_chip *chip = i2c_get_clientdata(client);
 
 	bh1770_chip_on(chip);

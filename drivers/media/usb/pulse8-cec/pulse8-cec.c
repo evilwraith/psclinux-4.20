@@ -51,7 +51,7 @@ MODULE_DESCRIPTION("Pulse Eight HDMI CEC driver");
 MODULE_LICENSE("GPL");
 
 static int debug;
-static int persistent_config;
+static int persistent_config = 1;
 module_param(debug, int, 0644);
 module_param(persistent_config, int, 0644);
 MODULE_PARM_DESC(debug, "debug level (0-1)");
@@ -148,15 +148,18 @@ static void pulse8_irq_work_handler(struct work_struct *work)
 		cec_received_msg(pulse8->adap, &pulse8->rx_msg);
 		break;
 	case MSGCODE_TRANSMIT_SUCCEEDED:
-		cec_transmit_attempt_done(pulse8->adap, CEC_TX_STATUS_OK);
+		cec_transmit_done(pulse8->adap, CEC_TX_STATUS_OK,
+				  0, 0, 0, 0);
 		break;
 	case MSGCODE_TRANSMIT_FAILED_ACK:
-		cec_transmit_attempt_done(pulse8->adap, CEC_TX_STATUS_NACK);
+		cec_transmit_done(pulse8->adap, CEC_TX_STATUS_NACK,
+				  0, 1, 0, 0);
 		break;
 	case MSGCODE_TRANSMIT_FAILED_LINE:
 	case MSGCODE_TRANSMIT_FAILED_TIMEOUT_DATA:
 	case MSGCODE_TRANSMIT_FAILED_TIMEOUT_LINE:
-		cec_transmit_attempt_done(pulse8->adap, CEC_TX_STATUS_ERROR);
+		cec_transmit_done(pulse8->adap, CEC_TX_STATUS_ERROR,
+				  0, 0, 0, 1);
 		break;
 	}
 }
@@ -329,7 +332,7 @@ static int pulse8_setup(struct pulse8 *pulse8, struct serio *serio,
 	u8 cmd[2];
 	int err;
 	struct tm tm;
-	time64_t date;
+	time_t date;
 
 	pulse8->vers = 0;
 
@@ -349,7 +352,7 @@ static int pulse8_setup(struct pulse8 *pulse8, struct serio *serio,
 	if (err)
 		return err;
 	date = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
-	time64_to_tm(date, 0, &tm);
+	time_to_tm(date, 0, &tm);
 	dev_info(pulse8->dev, "Firmware build date %04ld.%02d.%02d %02d:%02d:%02d\n",
 		 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 		 tm.tm_hour, tm.tm_min, tm.tm_sec);
@@ -458,7 +461,7 @@ static int pulse8_apply_persistent_config(struct pulse8 *pulse8,
 
 static int pulse8_cec_adap_enable(struct cec_adapter *adap, bool enable)
 {
-	struct pulse8 *pulse8 = cec_get_drvdata(adap);
+	struct pulse8 *pulse8 = adap->priv;
 	u8 cmd[16];
 	int err;
 
@@ -471,7 +474,7 @@ static int pulse8_cec_adap_enable(struct cec_adapter *adap, bool enable)
 
 static int pulse8_cec_adap_log_addr(struct cec_adapter *adap, u8 log_addr)
 {
-	struct pulse8 *pulse8 = cec_get_drvdata(adap);
+	struct pulse8 *pulse8 = adap->priv;
 	u16 mask = 0;
 	u16 pa = adap->phys_addr;
 	u8 cmd[16];
@@ -571,8 +574,7 @@ static int pulse8_cec_adap_log_addr(struct cec_adapter *adap, u8 log_addr)
 			memset(osd_str + osd_len, ' ', 4 - osd_len);
 			osd_len = 4;
 			osd_str[osd_len] = '\0';
-			strscpy(adap->log_addrs.osd_name, osd_str,
-				sizeof(adap->log_addrs.osd_name));
+			strcpy(adap->log_addrs.osd_name, osd_str);
 		}
 		err = pulse8_send_and_wait(pulse8, cmd, 1 + osd_len,
 					   MSGCODE_COMMAND_ACCEPTED, 0);
@@ -592,7 +594,7 @@ unlock:
 static int pulse8_cec_adap_transmit(struct cec_adapter *adap, u8 attempts,
 				    u32 signal_free_time, struct cec_msg *msg)
 {
-	struct pulse8 *pulse8 = cec_get_drvdata(adap);
+	struct pulse8 *pulse8 = adap->priv;
 	u8 cmd[2];
 	unsigned int i;
 	int err;
@@ -643,7 +645,8 @@ static const struct cec_adap_ops pulse8_cec_adap_ops = {
 
 static int pulse8_connect(struct serio *serio, struct serio_driver *drv)
 {
-	u32 caps = CEC_CAP_DEFAULTS | CEC_CAP_PHYS_ADDR | CEC_CAP_MONITOR_ALL;
+	u32 caps = CEC_CAP_TRANSMIT | CEC_CAP_LOG_ADDRS | CEC_CAP_PHYS_ADDR |
+		CEC_CAP_PASSTHROUGH | CEC_CAP_RC | CEC_CAP_MONITOR_ALL;
 	struct pulse8 *pulse8;
 	int err = -ENOMEM;
 	struct cec_log_addrs log_addrs = {};
@@ -656,7 +659,7 @@ static int pulse8_connect(struct serio *serio, struct serio_driver *drv)
 
 	pulse8->serio = serio;
 	pulse8->adap = cec_allocate_adapter(&pulse8_cec_adap_ops, pulse8,
-					    dev_name(&serio->dev), caps, 1);
+		"HDMI CEC", caps, 1);
 	err = PTR_ERR_OR_ZERO(pulse8->adap);
 	if (err < 0)
 		goto free_device;
@@ -732,7 +735,7 @@ static void pulse8_ping_eeprom_work_handler(struct work_struct *work)
 	mutex_unlock(&pulse8->config_lock);
 }
 
-static const struct serio_device_id pulse8_serio_ids[] = {
+static struct serio_device_id pulse8_serio_ids[] = {
 	{
 		.type	= SERIO_RS232,
 		.proto	= SERIO_PULSE8_CEC,

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __USBAUDIO_ENDPOINT_H
 #define __USBAUDIO_ENDPOINT_H
 
@@ -19,7 +18,7 @@ int snd_usb_endpoint_set_params(struct snd_usb_endpoint *ep,
 				struct audioformat *fmt,
 				struct snd_usb_endpoint *sync_ep);
 
-int  snd_usb_endpoint_start(struct snd_usb_endpoint *ep);
+int  snd_usb_endpoint_start(struct snd_usb_endpoint *ep, bool can_sleep);
 void snd_usb_endpoint_stop(struct snd_usb_endpoint *ep);
 void snd_usb_endpoint_sync_pending_stop(struct snd_usb_endpoint *ep);
 int  snd_usb_endpoint_activate(struct snd_usb_endpoint *ep);
@@ -34,4 +33,15 @@ void snd_usb_handle_sync_urb(struct snd_usb_endpoint *ep,
 			     struct snd_usb_endpoint *sender,
 			     const struct urb *urb);
 
+#define USB_AUDIO_DATA_OUT 0
+#define USB_AUDIO_DATA_IN 1
+#define USB_AUDIO_DATA_SYNC 2
+
+#ifdef CONFIG_MTK_UAC_POWER_SAVING
+extern void *mtk_usb_alloc_sram(int id, size_t size, dma_addr_t *dma);
+extern void mtk_usb_free_sram(int id);
+#else
+static inline void *mtk_usb_alloc_sram(int id, size_t size, dma_addr_t *dma) {return NULL; };
+static inline void mtk_usb_free_sram(int id) {};
+#endif
 #endif /* __USBAUDIO_ENDPOINT_H */

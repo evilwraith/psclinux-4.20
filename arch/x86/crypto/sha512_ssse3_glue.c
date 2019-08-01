@@ -109,6 +109,7 @@ static struct shash_alg sha512_ssse3_algs[] = { {
 		.cra_name	=	"sha512",
 		.cra_driver_name =	"sha512-ssse3",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA512_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -123,6 +124,7 @@ static struct shash_alg sha512_ssse3_algs[] = { {
 		.cra_name	=	"sha384",
 		.cra_driver_name =	"sha384-ssse3",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA384_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -149,7 +151,7 @@ asmlinkage void sha512_transform_avx(u64 *digest, const char *data,
 static bool avx_usable(void)
 {
 	if (!cpu_has_xfeatures(XFEATURE_MASK_SSE | XFEATURE_MASK_YMM, NULL)) {
-		if (boot_cpu_has(X86_FEATURE_AVX))
+		if (cpu_has_avx)
 			pr_info("AVX detected but unusable.\n");
 		return false;
 	}
@@ -186,6 +188,7 @@ static struct shash_alg sha512_avx_algs[] = { {
 		.cra_name	=	"sha512",
 		.cra_driver_name =	"sha512-avx",
 		.cra_priority	=	160,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA512_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -200,6 +203,7 @@ static struct shash_alg sha512_avx_algs[] = { {
 		.cra_name	=	"sha384",
 		.cra_driver_name =	"sha384-avx",
 		.cra_priority	=	160,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA384_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -257,6 +261,7 @@ static struct shash_alg sha512_avx2_algs[] = { {
 		.cra_name	=	"sha512",
 		.cra_driver_name =	"sha512-avx2",
 		.cra_priority	=	170,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA512_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -271,6 +276,7 @@ static struct shash_alg sha512_avx2_algs[] = { {
 		.cra_name	=	"sha384",
 		.cra_driver_name =	"sha384-avx2",
 		.cra_priority	=	170,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA384_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -340,10 +346,4 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SHA512 Secure Hash Algorithm, Supplemental SSE3 accelerated");
 
 MODULE_ALIAS_CRYPTO("sha512");
-MODULE_ALIAS_CRYPTO("sha512-ssse3");
-MODULE_ALIAS_CRYPTO("sha512-avx");
-MODULE_ALIAS_CRYPTO("sha512-avx2");
 MODULE_ALIAS_CRYPTO("sha384");
-MODULE_ALIAS_CRYPTO("sha384-ssse3");
-MODULE_ALIAS_CRYPTO("sha384-avx");
-MODULE_ALIAS_CRYPTO("sha384-avx2");

@@ -19,7 +19,7 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <media/dvb_frontend.h>
+#include "dvb_frontend.h"
 #include "ts2020.h"
 #include <linux/regmap.h>
 #include <linux/math64.h>
@@ -56,7 +56,7 @@ struct ts2020_reg_val {
 
 static void ts2020_stat_work(struct work_struct *work);
 
-static void ts2020_release(struct dvb_frontend *fe)
+static int ts2020_release(struct dvb_frontend *fe)
 {
 	struct ts2020_priv *priv = fe->tuner_priv;
 	struct i2c_client *client = priv->client;
@@ -64,6 +64,7 @@ static void ts2020_release(struct dvb_frontend *fe)
 	dev_dbg(&client->dev, "\n");
 
 	i2c_unregister_device(client);
+	return 0;
 }
 
 static int ts2020_sleep(struct dvb_frontend *fe)
@@ -368,7 +369,7 @@ static int ts2020_read_tuner_gain(struct dvb_frontend *fe, unsigned v_agc,
 		gain2 = clamp_t(long, gain2, 0, 13);
 		v_agc = clamp_t(long, v_agc, 400, 1100);
 
-		*_gain = -((__s64)gain1 * 2330 +
+		*_gain = -(gain1 * 2330 +
 			   gain2 * 3500 +
 			   v_agc * 24 / 10 * 10 +
 			   10000);
@@ -386,7 +387,7 @@ static int ts2020_read_tuner_gain(struct dvb_frontend *fe, unsigned v_agc,
 		gain3 = clamp_t(long, gain3, 0, 6);
 		v_agc = clamp_t(long, v_agc, 600, 1600);
 
-		*_gain = -((__s64)gain1 * 2650 +
+		*_gain = -(gain1 * 2650 +
 			   gain2 * 3380 +
 			   gain3 * 2850 +
 			   v_agc * 176 / 100 * 10 -
@@ -495,11 +496,11 @@ static int ts2020_read_signal_strength(struct dvb_frontend *fe,
 	return 0;
 }
 
-static const struct dvb_tuner_ops ts2020_tuner_ops = {
+static struct dvb_tuner_ops ts2020_tuner_ops = {
 	.info = {
 		.name = "TS2020",
-		.frequency_min_hz =  950 * MHz,
-		.frequency_max_hz = 2150 * MHz
+		.frequency_min = 950000,
+		.frequency_max = 2150000
 	},
 	.init = ts2020_init,
 	.release = ts2020_release,
@@ -525,7 +526,7 @@ struct dvb_frontend *ts2020_attach(struct dvb_frontend *fe,
 	pdata.attach_in_use = true;
 
 	memset(&board_info, 0, sizeof(board_info));
-	strscpy(board_info.type, "ts2020", I2C_NAME_SIZE);
+	strlcpy(board_info.type, "ts2020", I2C_NAME_SIZE);
 	board_info.addr = config->tuner_address;
 	board_info.platform_data = &pdata;
 	client = i2c_new_device(i2c, &board_info);
@@ -710,10 +711,6 @@ static int ts2020_remove(struct i2c_client *client)
 	struct ts2020_priv *dev = i2c_get_clientdata(client);
 
 	dev_dbg(&client->dev, "\n");
-
-	/* stop statistics polling */
-	if (!dev->dont_poll)
-		cancel_delayed_work_sync(&dev->stat_work);
 
 	regmap_exit(dev->regmap);
 	kfree(dev);

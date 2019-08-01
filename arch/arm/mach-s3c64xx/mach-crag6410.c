@@ -1,10 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0
-//
-// Copyright 2011 Wolfson Microelectronics plc
-//	Mark Brown <broonie@opensource.wolfsonmicro.com>
-//
-// Copyright 2011 Simtec Electronics
-//	Ben Dooks <ben@simtec.co.uk>
+/* linux/arch/arm/mach-s3c64xx/mach-crag6410.c
+ *
+ * Copyright 2011 Wolfson Microelectronics plc
+ *	Mark Brown <broonie@opensource.wolfsonmicro.com>
+ *
+ * Copyright 2011 Simtec Electronics
+ *	Ben Dooks <ben@simtec.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
 
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -24,7 +29,7 @@
 #include <linux/pwm_backlight.h>
 #include <linux/dm9000.h>
 #include <linux/gpio_keys.h>
-#include <linux/gpio/driver.h>
+#include <linux/basic_mmio_gpio.h>
 #include <linux/spi/spi.h>
 
 #include <linux/platform_data/pca953x.h>
@@ -47,7 +52,6 @@
 #include <mach/map.h>
 #include <mach/regs-gpio.h>
 #include <mach/gpio-samsung.h>
-#include <mach/irqs.h>
 
 #include <plat/fb.h>
 #include <plat/sdhci.h>
@@ -352,6 +356,7 @@ static struct fixed_voltage_config wallvdd_pdata = {
 	.supply_name = "WALLVDD",
 	.microvolts = 5000000,
 	.init_data = &wallvdd_data,
+	.gpio = -EINVAL,
 };
 
 static struct platform_device wallvdd_device = {
@@ -855,7 +860,6 @@ static void __init crag6410_machine_init(void)
 MACHINE_START(WLF_CRAGG_6410, "Wolfson Cragganmore 6410")
 	/* Maintainer: Mark Brown <broonie@opensource.wolfsonmicro.com> */
 	.atag_offset	= 0x100,
-	.nr_irqs	= S3C64XX_NR_IRQS,
 	.init_irq	= s3c6410_init_irq,
 	.map_io		= crag6410_map_io,
 	.init_machine	= crag6410_machine_init,

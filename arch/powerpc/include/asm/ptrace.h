@@ -24,40 +24,7 @@
 #define _ASM_POWERPC_PTRACE_H
 
 #include <uapi/asm/ptrace.h>
-#include <asm/asm-const.h>
 
-#ifndef __ASSEMBLY__
-struct pt_regs
-{
-	union {
-		struct user_pt_regs user_regs;
-		struct {
-			unsigned long gpr[32];
-			unsigned long nip;
-			unsigned long msr;
-			unsigned long orig_gpr3;
-			unsigned long ctr;
-			unsigned long link;
-			unsigned long xer;
-			unsigned long ccr;
-#ifdef CONFIG_PPC64
-			unsigned long softe;
-#else
-			unsigned long mq;
-#endif
-			unsigned long trap;
-			unsigned long dar;
-			unsigned long dsisr;
-			unsigned long result;
-		};
-	};
-
-#ifdef CONFIG_PPC64
-	unsigned long ppr;
-	unsigned long __pad;	/* Maintain 16 byte interrupt stack alignment */
-#endif
-};
-#endif
 
 #ifdef __powerpc64__
 
@@ -80,7 +47,7 @@ struct pt_regs
 				 STACK_FRAME_OVERHEAD + KERNEL_REDZONE_SIZE)
 #define STACK_FRAME_MARKER	12
 
-#ifdef PPC64_ELF_ABI_v2
+#if defined(_CALL_ELF) && _CALL_ELF == 2
 #define STACK_FRAME_MIN_SIZE	32
 #else
 #define STACK_FRAME_MIN_SIZE	STACK_FRAME_OVERHEAD
@@ -134,11 +101,6 @@ static inline long regs_return_value(struct pt_regs *regs)
 		return -regs->gpr[3];
 }
 
-static inline void regs_set_return_value(struct pt_regs *regs, unsigned long rc)
-{
-	regs->gpr[3] = rc;
-}
-
 #ifdef __powerpc64__
 #define user_mode(regs) ((((regs)->msr) >> MSR_PR_LG) & 0x1)
 #else
@@ -186,7 +148,7 @@ do {									      \
 
 #define arch_has_single_step()	(1)
 #define arch_has_block_step()	(!cpu_has_feature(CPU_FTR_601))
-#define ARCH_HAS_USER_SINGLE_STEP_REPORT
+#define ARCH_HAS_USER_SINGLE_STEP_INFO
 
 /*
  * kprobe-based event tracer support

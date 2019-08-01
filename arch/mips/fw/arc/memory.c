@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * memory.c: PROM library functions for acquiring/using memory descriptors
  *	     given to us from the ARCS firmware.
@@ -10,14 +9,14 @@
  * PROM library functions for acquiring/using memory descriptors given to us
  * from the ARCS firmware.  This is only used when CONFIG_ARC_MEMORY is set
  * because on some machines like SGI IP27 the ARC memory configuration data
- * completely bogus and alternate easier to use mechanisms are available.
+ * completly bogus and alternate easier to use mechanisms are available.
  */
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/swap.h>
 
 #include <asm/sgialib.h>

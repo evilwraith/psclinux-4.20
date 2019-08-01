@@ -155,6 +155,7 @@ struct vdec_vp8_vpu_inst {
  * @reg_base		   : HW register base address
  * @frm_cnt		   : decode frame count
  * @ctx			   : V4L2 context
+ * @dev			   : platform device
  * @vpu			   : VPU instance for decoder
  * @vsi			   : VPU share information
  */
@@ -619,10 +620,10 @@ static void vdec_vp8_deinit(unsigned long h_vdec)
 }
 
 static struct vdec_common_if vdec_vp8_if = {
-	.init		= vdec_vp8_init,
-	.decode		= vdec_vp8_decode,
-	.get_param	= vdec_vp8_get_param,
-	.deinit		= vdec_vp8_deinit,
+	vdec_vp8_init,
+	vdec_vp8_decode,
+	vdec_vp8_get_param,
+	vdec_vp8_deinit,
 };
 
 struct vdec_common_if *get_vp8_dec_comm_if(void);

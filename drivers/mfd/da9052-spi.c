@@ -46,8 +46,7 @@ static int da9052_spi_probe(struct spi_device *spi)
 	config.reg_bits = 7;
 	config.pad_bits = 1;
 	config.val_bits = 8;
-	config.use_single_read = true;
-	config.use_single_write = true;
+	config.use_single_rw = 1;
 
 	da9052->regmap = devm_regmap_init_spi(spi, &config);
 	if (IS_ERR(da9052->regmap)) {
@@ -68,7 +67,7 @@ static int da9052_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
-static const struct spi_device_id da9052_spi_id[] = {
+static struct spi_device_id da9052_spi_id[] = {
 	{"da9052", DA9052},
 	{"da9053-aa", DA9053_AA},
 	{"da9053-ba", DA9053_BA},

@@ -17,30 +17,33 @@ CEC_ADAP_G_LOG_ADDRS, CEC_ADAP_S_LOG_ADDRS - Get or set the logical addresses
 Synopsis
 ========
 
-.. c:function:: int ioctl( int fd, CEC_ADAP_G_LOG_ADDRS, struct cec_log_addrs *argp )
-   :name: CEC_ADAP_G_LOG_ADDRS
+.. cpp:function:: int ioctl( int fd, int request, struct cec_log_addrs *argp )
 
-.. c:function:: int ioctl( int fd, CEC_ADAP_S_LOG_ADDRS, struct cec_log_addrs *argp )
-   :name: CEC_ADAP_S_LOG_ADDRS
 
 Arguments
 =========
 
 ``fd``
-    File descriptor returned by :c:func:`open() <cec-open>`.
+    File descriptor returned by :ref:`open() <cec-func-open>`.
+
+``request``
+    CEC_ADAP_G_LOG_ADDRS, CEC_ADAP_S_LOG_ADDRS
 
 ``argp``
-    Pointer to struct :c:type:`cec_log_addrs`.
+
 
 Description
 ===========
 
+.. note:: This documents the proposed CEC API. This API is not yet finalized
+   and is currently only available as a staging kernel module.
+
 To query the current CEC logical addresses, applications call
 :ref:`ioctl CEC_ADAP_G_LOG_ADDRS <CEC_ADAP_G_LOG_ADDRS>` with a pointer to a
-struct :c:type:`cec_log_addrs` where the driver stores the logical addresses.
+:c:type:`struct cec_log_addrs` where the driver stores the logical addresses.
 
 To set new logical addresses, applications fill in
-struct :c:type:`cec_log_addrs` and call :ref:`ioctl CEC_ADAP_S_LOG_ADDRS <CEC_ADAP_S_LOG_ADDRS>`
+:c:type:`struct cec_log_addrs` and call :ref:`ioctl CEC_ADAP_S_LOG_ADDRS <CEC_ADAP_S_LOG_ADDRS>`
 with a pointer to this struct. The :ref:`ioctl CEC_ADAP_S_LOG_ADDRS <CEC_ADAP_S_LOG_ADDRS>`
 is only available if ``CEC_CAP_LOG_ADDRS`` is set (the ``ENOTTY`` error code is
 returned otherwise). The :ref:`ioctl CEC_ADAP_S_LOG_ADDRS <CEC_ADAP_S_LOG_ADDRS>`
@@ -48,9 +51,7 @@ can only be called by a file descriptor in initiator mode (see :ref:`CEC_S_MODE`
 the ``EBUSY`` error code will be returned.
 
 To clear existing logical addresses set ``num_log_addrs`` to 0. All other fields
-will be ignored in that case. The adapter will go to the unconfigured state and the
-``cec_version``, ``vendor_id`` and ``osd_name`` fields are all reset to their default
-values (CEC version 2.0, no vendor ID and an empty OSD name).
+will be ignored in that case. The adapter will go to the unconfigured state.
 
 If the physical address is valid (see :ref:`ioctl CEC_ADAP_S_PHYS_ADDR <CEC_ADAP_S_PHYS_ADDR>`),
 then this ioctl will block until all requested logical
@@ -63,11 +64,8 @@ logical addresses are claimed or cleared.
 Attempting to call :ref:`ioctl CEC_ADAP_S_LOG_ADDRS <CEC_ADAP_S_LOG_ADDRS>` when
 logical address types are already defined will return with error ``EBUSY``.
 
-.. c:type:: cec_log_addrs
 
-.. tabularcolumns:: |p{1.0cm}|p{8.0cm}|p{7.5cm}|
-
-.. cssclass:: longtable
+.. _cec-log-addrs:
 
 .. flat-table:: struct cec_log_addrs
     :header-rows:  0
@@ -148,9 +146,6 @@ logical address types are already defined will return with error ``EBUSY``.
         give the CEC framework more information about the device type, even
         though the framework won't use it directly in the CEC message.
 
-
-.. tabularcolumns:: |p{7.8cm}|p{1.0cm}|p{8.7cm}|
-
 .. _cec-log-addrs-flags:
 
 .. flat-table:: Flags for struct cec_log_addrs
@@ -176,17 +171,6 @@ logical address types are already defined will return with error ``EBUSY``.
 	and will appear as keystrokes. This features needs to be enabled explicitly.
 	If CEC is used to enter e.g. passwords, then you may not want to enable this
 	to avoid trivial snooping of the keystrokes.
-    * .. _`CEC-LOG-ADDRS-FL-CDC-ONLY`:
-
-      - ``CEC_LOG_ADDRS_FL_CDC_ONLY``
-      - 4
-      - If this flag is set, then the device is CDC-Only. CDC-Only CEC devices
-	are CEC devices that can only handle CDC messages.
-
-	All other messages are ignored.
-
-
-.. tabularcolumns:: |p{7.8cm}|p{1.0cm}|p{8.7cm}|
 
 .. _cec-versions:
 
@@ -212,7 +196,6 @@ logical address types are already defined will return with error ``EBUSY``.
       - CEC version according to the HDMI 2.0 standard.
 
 
-.. tabularcolumns:: |p{6.6cm}|p{2.2cm}|p{8.7cm}|
 
 .. _cec-prim-dev-types:
 
@@ -258,7 +241,6 @@ logical address types are already defined will return with error ``EBUSY``.
       - Use for a video processor device.
 
 
-.. tabularcolumns:: |p{6.6cm}|p{2.2cm}|p{8.7cm}|
 
 .. _cec-log-addr-types:
 
@@ -307,8 +289,6 @@ logical address types are already defined will return with error ``EBUSY``.
 
 
 
-.. tabularcolumns:: |p{6.6cm}|p{2.2cm}|p{8.7cm}|
-
 .. _cec-all-dev-types-flags:
 
 .. flat-table:: CEC All Device Types Flags
@@ -356,16 +336,3 @@ On success 0 is returned, on error -1 and the ``errno`` variable is set
 appropriately. The generic error codes are described at the
 :ref:`Generic Error Codes <gen-errors>` chapter.
 
-The :ref:`ioctl CEC_ADAP_S_LOG_ADDRS <CEC_ADAP_S_LOG_ADDRS>` can return the following
-error codes:
-
-ENOTTY
-    The ``CEC_CAP_LOG_ADDRS`` capability wasn't set, so this ioctl is not supported.
-
-EBUSY
-    The CEC adapter is currently configuring itself, or it is already configured and
-    ``num_log_addrs`` is non-zero, or another filehandle is in exclusive follower or
-    initiator mode, or the filehandle is in mode ``CEC_MODE_NO_INITIATOR``.
-
-EINVAL
-    The contents of struct :c:type:`cec_log_addrs` is invalid.

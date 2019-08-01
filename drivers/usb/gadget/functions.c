@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -59,7 +58,7 @@ struct usb_function *usb_get_function(struct usb_function_instance *fi)
 	struct usb_function *f;
 
 	f = fi->fd->alloc_func(fi);
-	if (IS_ERR(f))
+	if ((f == NULL) || IS_ERR(f))
 		return f;
 	f->fi = fi;
 	return f;

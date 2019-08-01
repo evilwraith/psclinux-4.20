@@ -65,6 +65,8 @@ struct thread_info {
 #ifdef CONFIG_ARM_THUMBEE
 	unsigned long		thumbee_state;	/* ThumbEE Handler Base register */
 #endif
+	int			cpu_excp;
+	void			*regs_on_excp;
 };
 
 #define INIT_THREAD_INFO(tsk)						\
@@ -74,6 +76,9 @@ struct thread_info {
 	.preempt_count	= INIT_PREEMPT_COUNT,				\
 	.addr_limit	= KERNEL_DS,					\
 }
+
+#define init_thread_info	(init_thread_union.thread_info)
+#define init_stack		(init_thread_union.stack)
 
 /*
  * how to get the current stack pointer in C
@@ -121,10 +126,10 @@ extern void vfp_flush_hwstate(struct thread_info *);
 struct user_vfp;
 struct user_vfp_exc;
 
-extern int vfp_preserve_user_clear_hwstate(struct user_vfp *,
-					   struct user_vfp_exc *);
-extern int vfp_restore_user_hwstate(struct user_vfp *,
-				    struct user_vfp_exc *);
+extern int vfp_preserve_user_clear_hwstate(struct user_vfp __user *,
+					   struct user_vfp_exc __user *);
+extern int vfp_restore_user_hwstate(struct user_vfp __user *,
+				    struct user_vfp_exc __user *);
 #endif
 
 /*

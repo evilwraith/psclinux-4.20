@@ -18,7 +18,10 @@
 
 struct regmap;
 struct device;
-struct mtk_disp_mutex;
+struct mtk_disp_mutex {
+	int id;
+	bool claimed;
+};
 
 void mtk_ddp_add_comp_to_path(void __iomem *config_regs,
 			      enum mtk_ddp_comp_id cur,

@@ -185,19 +185,19 @@ static int sun4i_lradc_load_dt_keymap(struct device *dev,
 
 		error = of_property_read_u32(pp, "channel", &channel);
 		if (error || channel != 0) {
-			dev_err(dev, "%pOFn: Inval channel prop\n", pp);
+			dev_err(dev, "%s: Inval channel prop\n", pp->name);
 			return -EINVAL;
 		}
 
 		error = of_property_read_u32(pp, "voltage", &map->voltage);
 		if (error) {
-			dev_err(dev, "%pOFn: Inval voltage prop\n", pp);
+			dev_err(dev, "%s: Inval voltage prop\n", pp->name);
 			return -EINVAL;
 		}
 
 		error = of_property_read_u32(pp, "linux,code", &map->keycode);
 		if (error) {
-			dev_err(dev, "%pOFn: Inval linux,code prop\n", pp);
+			dev_err(dev, "%s: Inval linux,code prop\n", pp->name);
 			return -EINVAL;
 		}
 
@@ -261,6 +261,7 @@ static int sun4i_lradc_probe(struct platform_device *pdev)
 	if (error)
 		return error;
 
+	platform_set_drvdata(pdev, lradc);
 	return 0;
 }
 

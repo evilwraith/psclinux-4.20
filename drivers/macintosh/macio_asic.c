@@ -31,6 +31,7 @@
 #include <asm/macio.h>
 #include <asm/pmac_feature.h>
 #include <asm/prom.h>
+#include <asm/pci-bridge.h>
 
 #undef DEBUG
 
@@ -133,7 +134,7 @@ static int macio_device_resume(struct device * dev)
 	return 0;
 }
 
-extern const struct attribute_group *macio_dev_groups[];
+extern struct device_attribute macio_dev_attrs[];
 
 struct bus_type macio_bus_type = {
        .name	= "macio",
@@ -144,7 +145,7 @@ struct bus_type macio_bus_type = {
        .shutdown = macio_device_shutdown,
        .suspend	= macio_device_suspend,
        .resume	= macio_device_resume,
-       .dev_groups = macio_dev_groups,
+       .dev_attrs = macio_dev_attrs,
 };
 
 static int __init macio_bus_driver_init(void)
@@ -236,7 +237,7 @@ static void macio_create_fixup_irq(struct macio_dev *dev, int index,
 	unsigned int irq;
 
 	irq = irq_create_mapping(NULL, line);
-	if (!irq) {
+	if (irq != NO_IRQ) {
 		dev->interrupt[index].start = irq;
 		dev->interrupt[index].flags = IORESOURCE_IRQ;
 		dev->interrupt[index].name = dev_name(&dev->ofdev.dev);
@@ -299,7 +300,7 @@ static void macio_setup_interrupts(struct macio_dev *dev)
 			break;
 		res = &dev->interrupt[j];
 		irq = irq_of_parse_and_map(np, i++);
-		if (!irq)
+		if (irq == NO_IRQ)
 			break;
 		res->start = irq;
 		res->flags = IORESOURCE_IRQ;
@@ -360,10 +361,9 @@ static struct macio_dev * macio_add_one_device(struct macio_chip *chip,
 					       struct macio_dev *in_bay,
 					       struct resource *parent_res)
 {
-	char name[MAX_NODE_NAME_SIZE + 1];
 	struct macio_dev *dev;
 	const u32 *reg;
-
+	
 	if (np == NULL)
 		return NULL;
 
@@ -376,7 +376,6 @@ static struct macio_dev * macio_add_one_device(struct macio_chip *chip,
 	dev->ofdev.dev.of_node = np;
 	dev->ofdev.archdata.dma_mask = 0xffffffffUL;
 	dev->ofdev.dev.dma_mask = &dev->ofdev.archdata.dma_mask;
-	dev->ofdev.dev.coherent_dma_mask = dev->ofdev.archdata.dma_mask;
 	dev->ofdev.dev.parent = parent;
 	dev->ofdev.dev.bus = &macio_bus_type;
 	dev->ofdev.dev.release = macio_release_dev;
@@ -394,7 +393,6 @@ static struct macio_dev * macio_add_one_device(struct macio_chip *chip,
 	 * To get all the fields, copy all archdata
 	 */
 	dev->ofdev.dev.archdata = chip->lbus.pdev->dev.archdata;
-	dev->ofdev.dev.dma_ops = chip->lbus.pdev->dev.dma_ops;
 #endif /* CONFIG_PCI */
 
 #ifdef DEBUG
@@ -403,7 +401,6 @@ static struct macio_dev * macio_add_one_device(struct macio_chip *chip,
 #endif
 
 	/* MacIO itself has a different reg, we use it's PCI base */
-	snprintf(name, sizeof(name), "%pOFn", np);
 	if (np == chip->of_node) {
 		dev_set_name(&dev->ofdev.dev, "%1d.%08x:%.*s",
 			     chip->lbus.index,
@@ -412,12 +409,12 @@ static struct macio_dev * macio_add_one_device(struct macio_chip *chip,
 #else
 			0, /* NuBus may want to do something better here */
 #endif
-			MAX_NODE_NAME_SIZE, name);
+			MAX_NODE_NAME_SIZE, np->name);
 	} else {
 		reg = of_get_property(np, "reg", NULL);
 		dev_set_name(&dev->ofdev.dev, "%1d.%08x:%.*s",
 			     chip->lbus.index,
-			     reg ? *reg : 0, MAX_NODE_NAME_SIZE, name);
+			     reg ? *reg : 0, MAX_NODE_NAME_SIZE, np->name);
 	}
 
 	/* Setup interrupts & resources */

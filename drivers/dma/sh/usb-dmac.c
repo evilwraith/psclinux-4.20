@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Renesas USB DMA Controller Driver
  *
@@ -7,6 +6,10 @@
  * based on rcar-dmac.c
  * Copyright (C) 2014 Renesas Electronics Inc.
  * Author: Laurent Pinchart <laurent.pinchart@ideasonboard.com>
+ *
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -114,7 +117,7 @@ struct usb_dmac {
 #define USB_DMASWR			0x0008
 #define USB_DMASWR_SWR			(1 << 0)
 #define USB_DMAOR			0x0060
-#define USB_DMAOR_AE			(1 << 1)
+#define USB_DMAOR_AE			(1 << 2)
 #define USB_DMAOR_DME			(1 << 0)
 
 #define USB_DMASAR			0x0000
@@ -266,7 +269,7 @@ static int usb_dmac_desc_alloc(struct usb_dmac_chan *chan, unsigned int sg_len,
 	struct usb_dmac_desc *desc;
 	unsigned long flags;
 
-	desc = kzalloc(struct_size(desc, sg, sg_len), gfp);
+	desc = kzalloc(sizeof(*desc) + sg_len * sizeof(desc->sg[0]), gfp);
 	if (!desc)
 		return -ENOMEM;
 
@@ -445,7 +448,7 @@ usb_dmac_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 static int usb_dmac_chan_terminate_all(struct dma_chan *chan)
 {
 	struct usb_dmac_chan *uchan = to_usb_dmac_chan(chan);
-	struct usb_dmac_desc *desc, *_desc;
+	struct usb_dmac_desc *desc;
 	unsigned long flags;
 	LIST_HEAD(head);
 	LIST_HEAD(list);
@@ -456,7 +459,7 @@ static int usb_dmac_chan_terminate_all(struct dma_chan *chan)
 	if (uchan->desc)
 		uchan->desc = NULL;
 	list_splice_init(&uchan->desc_got, &list);
-	list_for_each_entry_safe(desc, _desc, &list, node)
+	list_for_each_entry(desc, &list, node)
 		list_move_tail(&desc->node, &uchan->desc_freed);
 	spin_unlock_irqrestore(&uchan->vc.lock, flags);
 	vchan_dma_desc_free_list(&uchan->vc, &head);
@@ -649,6 +652,7 @@ static bool usb_dmac_chan_filter(struct dma_chan *chan, void *arg)
 static struct dma_chan *usb_dmac_of_xlate(struct of_phandle_args *dma_spec,
 					  struct of_dma *ofdma)
 {
+	struct usb_dmac_chan *uchan;
 	struct dma_chan *chan;
 	dma_cap_mask_t mask;
 
@@ -662,6 +666,8 @@ static struct dma_chan *usb_dmac_of_xlate(struct of_phandle_args *dma_spec,
 	chan = dma_request_channel(mask, usb_dmac_chan_filter, dma_spec);
 	if (!chan)
 		return NULL;
+
+	uchan = to_usb_dmac_chan(chan);
 
 	return chan;
 }

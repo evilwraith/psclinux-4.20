@@ -1,9 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * platform.c - platform 'pseudo' bus for legacy devices
  *
  * Copyright (c) 2002-3 Patrick Mochel
  * Copyright (c) 2002-3 Open Source Development Labs
+ *
+ * This file is released under the GPLv2
  *
  * Please see Documentation/driver-model/platform.txt for more
  * information.
@@ -16,7 +17,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/dma-mapping.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
@@ -25,7 +26,6 @@
 #include <linux/acpi.h>
 #include <linux/clk/clk-conf.h>
 #include <linux/limits.h>
-#include <linux/property.h>
 
 #include "base.h"
 #include "power/power.h"
@@ -96,60 +96,25 @@ int platform_get_irq(struct platform_device *dev, unsigned int num)
 		int ret;
 
 		ret = of_irq_get(dev->dev.of_node, num);
-		if (ret > 0 || ret == -EPROBE_DEFER)
+		if (ret >= 0 || ret == -EPROBE_DEFER)
 			return ret;
 	}
 
 	r = platform_get_resource(dev, IORESOURCE_IRQ, num);
-	if (has_acpi_companion(&dev->dev)) {
-		if (r && r->flags & IORESOURCE_DISABLED) {
-			int ret;
-
-			ret = acpi_irq_get(ACPI_HANDLE(&dev->dev), num, r);
-			if (ret)
-				return ret;
-		}
-	}
-
 	/*
 	 * The resources may pass trigger flags to the irqs that need
 	 * to be set up. It so happens that the trigger flags for
 	 * IORESOURCE_BITS correspond 1-to-1 to the IRQF_TRIGGER*
 	 * settings.
 	 */
-	if (r && r->flags & IORESOURCE_BITS) {
-		struct irq_data *irqd;
-
-		irqd = irq_get_irq_data(r->start);
-		if (!irqd)
-			return -ENXIO;
-		irqd_set_trigger_type(irqd, r->flags & IORESOURCE_BITS);
-	}
+	if (r && r->flags & IORESOURCE_BITS)
+		irqd_set_trigger_type(irq_get_irq_data(r->start),
+				      r->flags & IORESOURCE_BITS);
 
 	return r ? r->start : -ENXIO;
 #endif
 }
 EXPORT_SYMBOL_GPL(platform_get_irq);
-
-/**
- * platform_irq_count - Count the number of IRQs a platform device uses
- * @dev: platform device
- *
- * Return: Number of IRQs a platform device uses or EPROBE_DEFER
- */
-int platform_irq_count(struct platform_device *dev)
-{
-	int ret, nr = 0;
-
-	while ((ret = platform_get_irq(dev, nr)) >= 0)
-		nr++;
-
-	if (ret == -EPROBE_DEFER)
-		return ret;
-
-	return nr;
-}
-EXPORT_SYMBOL_GPL(platform_irq_count);
 
 /**
  * platform_get_resource_byname - get a resource for a device by name
@@ -189,7 +154,7 @@ int platform_get_irq_byname(struct platform_device *dev, const char *name)
 		int ret;
 
 		ret = of_irq_get_byname(dev->dev.of_node, name);
-		if (ret > 0 || ret == -EPROBE_DEFER)
+		if (ret >= 0 || ret == -EPROBE_DEFER)
 			return ret;
 	}
 
@@ -334,22 +299,6 @@ int platform_device_add_data(struct platform_device *pdev, const void *data,
 EXPORT_SYMBOL_GPL(platform_device_add_data);
 
 /**
- * platform_device_add_properties - add built-in properties to a platform device
- * @pdev: platform device to add properties to
- * @properties: null terminated array of properties to add
- *
- * The function will take deep copy of @properties and attach the copy to the
- * platform device. The memory associated with properties will be freed when the
- * platform device is released.
- */
-int platform_device_add_properties(struct platform_device *pdev,
-				   const struct property_entry *properties)
-{
-	return device_add_properties(&pdev->dev, properties);
-}
-EXPORT_SYMBOL_GPL(platform_device_add_properties);
-
-/**
  * platform_device_add - add a platform device to device hierarchy
  * @pdev: platform device we're adding
  *
@@ -405,7 +354,7 @@ int platform_device_add(struct platform_device *pdev)
 		}
 
 		if (p && insert_resource(p, r)) {
-			dev_err(&pdev->dev, "failed to claim resource %d: %pR\n", i, r);
+			dev_err(&pdev->dev, "failed to claim resource %d\n", i);
 			ret = -EBUSY;
 			goto failed;
 		}
@@ -448,7 +397,6 @@ void platform_device_del(struct platform_device *pdev)
 	int i;
 
 	if (pdev) {
-		device_remove_properties(&pdev->dev);
 		device_del(&pdev->dev);
 
 		if (pdev->id_auto) {
@@ -465,15 +413,32 @@ void platform_device_del(struct platform_device *pdev)
 }
 EXPORT_SYMBOL_GPL(platform_device_del);
 
+#ifdef CONFIG_MTPROF
+#include "bootprof.h"
+#else
+#define TIME_LOG_START()
+#define TIME_LOG_END()
+#define bootprof_pdev_register(ts, pdev)
+#endif
+
 /**
  * platform_device_register - add a platform-level device
  * @pdev: platform device we're adding
  */
 int platform_device_register(struct platform_device *pdev)
 {
+	int ret;
+#ifdef CONFIG_MTPROF
+	unsigned long long ts = 0;
+#endif
+
+	TIME_LOG_START();
 	device_initialize(&pdev->dev);
 	arch_setup_pdev_archdata(pdev);
-	return platform_device_add(pdev);
+	ret = platform_device_add(pdev);
+	TIME_LOG_END();
+	bootprof_pdev_register(ts, pdev);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(platform_device_register);
 
@@ -539,13 +504,6 @@ struct platform_device *platform_device_register_full(
 	if (ret)
 		goto err;
 
-	if (pdevinfo->properties) {
-		ret = platform_device_add_properties(pdev,
-						     pdevinfo->properties);
-		if (ret)
-			goto err;
-	}
-
 	ret = platform_device_add(pdev);
 	if (ret) {
 err:
@@ -572,16 +530,17 @@ static int platform_drv_probe(struct device *_dev)
 		return ret;
 
 	ret = dev_pm_domain_attach(_dev, true);
-	if (ret)
-		goto out;
-
-	if (drv->probe) {
-		ret = drv->probe(dev);
-		if (ret)
-			dev_pm_domain_detach(_dev, true);
+	if (ret != -EPROBE_DEFER) {
+		if (drv->probe) {
+			ret = drv->probe(dev);
+			if (ret)
+				dev_pm_domain_detach(_dev, true);
+		} else {
+			/* don't fail if just dev_pm_domain_attach failed */
+			ret = 0;
+		}
 	}
 
-out:
 	if (drv->prevent_deferred_probe && ret == -EPROBE_DEFER) {
 		dev_warn(_dev, "probe deferral not supported\n");
 		ret = -ENXIO;
@@ -615,6 +574,7 @@ static void platform_drv_shutdown(struct device *_dev)
 
 	if (drv->shutdown)
 		drv->shutdown(dev);
+	dev_pm_domain_detach(_dev, true);
 }
 
 /**
@@ -845,7 +805,7 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *a,
 	struct platform_device	*pdev = to_platform_device(dev);
 	int len;
 
-	len = of_device_modalias(dev, buf, PAGE_SIZE);
+	len = of_device_get_modalias(dev, buf, PAGE_SIZE -1);
 	if (len != -ENODEV)
 		return len;
 
@@ -864,10 +824,9 @@ static ssize_t driver_override_store(struct device *dev,
 				     const char *buf, size_t count)
 {
 	struct platform_device *pdev = to_platform_device(dev);
-	char *driver_override, *old, *cp;
+	char *driver_override, *old = pdev->driver_override, *cp;
 
-	/* We need to keep extra room for a newline */
-	if (count >= (PAGE_SIZE - 1))
+	if (count > PATH_MAX)
 		return -EINVAL;
 
 	driver_override = kstrndup(buf, count, GFP_KERNEL);
@@ -878,15 +837,12 @@ static ssize_t driver_override_store(struct device *dev,
 	if (cp)
 		*cp = '\0';
 
-	device_lock(dev);
-	old = pdev->driver_override;
 	if (strlen(driver_override)) {
 		pdev->driver_override = driver_override;
 	} else {
 		kfree(driver_override);
 		pdev->driver_override = NULL;
 	}
-	device_unlock(dev);
 
 	kfree(old);
 
@@ -897,12 +853,8 @@ static ssize_t driver_override_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
 	struct platform_device *pdev = to_platform_device(dev);
-	ssize_t len;
 
-	device_lock(dev);
-	len = sprintf(buf, "%s\n", pdev->driver_override);
-	device_unlock(dev);
-	return len;
+	return sprintf(buf, "%s\n", pdev->driver_override);
 }
 static DEVICE_ATTR_RW(driver_override);
 
@@ -1129,22 +1081,6 @@ int platform_pm_restore(struct device *dev)
 
 #endif /* CONFIG_HIBERNATE_CALLBACKS */
 
-int platform_dma_configure(struct device *dev)
-{
-	enum dev_dma_attr attr;
-	int ret = 0;
-
-	if (dev->of_node) {
-		ret = of_dma_configure(dev, dev->of_node, true);
-	} else if (has_acpi_companion(dev)) {
-		attr = acpi_get_dma_attr(to_acpi_device_node(dev->fwnode));
-		if (attr != DEV_DMA_NOT_SUPPORTED)
-			ret = acpi_dma_configure(dev, attr);
-	}
-
-	return ret;
-}
-
 static const struct dev_pm_ops platform_dev_pm_ops = {
 	.runtime_suspend = pm_generic_runtime_suspend,
 	.runtime_resume = pm_generic_runtime_resume,
@@ -1156,7 +1092,6 @@ struct bus_type platform_bus_type = {
 	.dev_groups	= platform_dev_groups,
 	.match		= platform_match,
 	.uevent		= platform_uevent,
-	.dma_configure	= platform_dma_configure,
 	.pm		= &platform_dev_pm_ops,
 };
 EXPORT_SYMBOL_GPL(platform_bus_type);
@@ -1168,10 +1103,8 @@ int __init platform_bus_init(void)
 	early_platform_cleanup();
 
 	error = device_register(&platform_bus);
-	if (error) {
-		put_device(&platform_bus);
+	if (error)
 		return error;
-	}
 	error =  bus_register(&platform_bus_type);
 	if (error)
 		device_unregister(&platform_bus);
@@ -1180,7 +1113,7 @@ int __init platform_bus_init(void)
 }
 
 #ifndef ARCH_HAS_DMA_GET_REQUIRED_MASK
-static u64 dma_default_get_required_mask(struct device *dev)
+u64 dma_get_required_mask(struct device *dev)
 {
 	u32 low_totalram = ((max_pfn - 1) << PAGE_SHIFT);
 	u32 high_totalram = ((max_pfn - 1) >> (32 - PAGE_SHIFT));
@@ -1197,15 +1130,6 @@ static u64 dma_default_get_required_mask(struct device *dev)
 		mask = (((u64)high_totalram) << 32) + 0xffffffff;
 	}
 	return mask;
-}
-
-u64 dma_get_required_mask(struct device *dev)
-{
-	const struct dma_map_ops *ops = get_dma_ops(dev);
-
-	if (ops->get_required_mask)
-		return ops->get_required_mask(dev);
-	return dma_default_get_required_mask(dev);
 }
 EXPORT_SYMBOL_GPL(dma_get_required_mask);
 #endif

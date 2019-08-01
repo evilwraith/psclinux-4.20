@@ -16,7 +16,6 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_edid.h>
-#include <linux/arm-smccc.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/hdmi.h>
@@ -35,6 +34,7 @@
 #include "mtk_cec.h"
 #include "mtk_hdmi.h"
 #include "mtk_hdmi_regs.h"
+
 
 #define NCTS_BYTES	7
 
@@ -149,7 +149,6 @@ struct hdmi_audio_param {
 
 struct mtk_hdmi {
 	struct drm_bridge bridge;
-	struct drm_bridge *next_bridge;
 	struct drm_connector conn;
 	struct device *dev;
 	struct phy *phy;
@@ -232,23 +231,8 @@ static void mtk_hdmi_hw_vid_black(struct mtk_hdmi *hdmi, bool black)
 
 static void mtk_hdmi_hw_make_reg_writable(struct mtk_hdmi *hdmi, bool enable)
 {
-	struct arm_smccc_res res;
-	struct mtk_hdmi_phy *hdmi_phy = phy_get_drvdata(hdmi->phy);
-
-	/*
-	 * MT8173 HDMI hardware has an output control bit to enable/disable HDMI
-	 * output. This bit can only be controlled in ARM supervisor mode.
-	 * The ARM trusted firmware provides an API for the HDMI driver to set
-	 * this control bit to enable HDMI output in supervisor mode.
-	 */
-	if (hdmi_phy->conf && hdmi_phy->conf->tz_disabled)
-		regmap_update_bits(hdmi->sys_regmap,
-				   hdmi->sys_offset + HDMI_SYS_CFG20,
-				   0x80008005, enable ? 0x80000005 : 0x8000);
-	else
-		arm_smccc_smc(MTK_SIP_SET_AUTHORIZED_SECURE_REG, 0x14000904,
-			      0x80000000, 0, 0, 0, 0, 0, &res);
-
+ 	regmap_update_bits(hdmi->sys_regmap, hdmi->sys_offset + HDMI_SYS_CFG20,
+				HDMI_PSECUR_EN, enable ? 0 : HDMI_PSECUR_EN);
 	regmap_update_bits(hdmi->sys_regmap, hdmi->sys_offset + HDMI_SYS_CFG20,
 			   HDMI_PCLK_FREE_RUN, enable ? HDMI_PCLK_FREE_RUN : 0);
 	regmap_update_bits(hdmi->sys_regmap, hdmi->sys_offset + HDMI_SYS_CFG1C,
@@ -463,7 +447,6 @@ static void mtk_hdmi_hw_aud_set_bit_num(struct mtk_hdmi *hdmi,
 		val = AOUT_24BIT;
 		break;
 	}
-
 	mtk_hdmi_mask(hdmi, GRL_AOUT_CFG, val, AOUT_BNUM_SEL_MASK);
 }
 
@@ -568,9 +551,17 @@ static void mtk_hdmi_hw_aud_set_input_type(struct mtk_hdmi *hdmi,
 	if (input_type == HDMI_AUD_INPUT_I2S &&
 	    (val & CFG1_SPDIF) == CFG1_SPDIF) {
 		val &= ~CFG1_SPDIF;
+		regmap_update_bits(hdmi->sys_regmap, hdmi->sys_offset + MMSYS_CG_CON1,
+					HDMI_ADSP_BCK_CG, HDMI_ADSP_BCK_CG_CLR);
+		mtk_hdmi_mask(hdmi, HDCP_STATUS_RESET,RG_SPD_IIS_SEL | RG_N_DIV2,
+				  RG_SPD_IIS_SEL | RG_N_DIV2);
 	} else if (input_type == HDMI_AUD_INPUT_SPDIF &&
 		(val & CFG1_SPDIF) == 0) {
 		val |= CFG1_SPDIF;
+		regmap_update_bits(hdmi->sys_regmap, hdmi->sys_offset + MMSYS_CG_CON1,
+					HDMI_SPDIF_CLK_CG, HDMI_SPDIF_CLK_CG_CLR);
+		regmap_update_bits(hdmi->sys_regmap, hdmi->sys_offset + MMSYS_CG_CON1,
+					HDMI_ADSP_BCK_CG, HDMI_ADSP_BCK_CG);
 	}
 	mtk_hdmi_write(hdmi, GRL_CFG1, val);
 }
@@ -661,7 +652,6 @@ static const struct hdmi_acr_n hdmi_rec_n_table[] = {
 	{ 297000, {  3072,  4704,  5120 } },
 	{      0, {  4096,  6272,  6144 } }, /* all other TMDS clocks */
 };
-
 /**
  * hdmi_recommended_n() - Return N value recommended by HDMI specification
  * @freq: audio sample rate in Hz
@@ -851,7 +841,7 @@ static int mtk_hdmi_video_change_vpll(struct mtk_hdmi *hdmi, u32 clock)
 		dev_warn(hdmi->dev, "Want PLL %u Hz, got %lu Hz\n", clock,
 			 rate);
 	else
-		dev_dbg(hdmi->dev, "Want PLL %u Hz, got %lu Hz\n", clock, rate);
+		dev_info(hdmi->dev, "Want PLL %u Hz, got %lu Hz\n", clock, rate);
 
 	mtk_hdmi_hw_config_sys(hdmi);
 	mtk_hdmi_hw_set_deep_color_mode(hdmi);
@@ -899,7 +889,7 @@ static int mtk_hdmi_aud_set_input(struct mtk_hdmi *hdmi)
 	}
 
 	mtk_hdmi_hw_aud_set_i2s_fmt(hdmi, hdmi->aud_param.aud_i2s_fmt);
-	mtk_hdmi_hw_aud_set_bit_num(hdmi, HDMI_AUDIO_SAMPLE_SIZE_24);
+	mtk_hdmi_hw_aud_set_bit_num(hdmi, HDMI_AUDIO_SAMPLE_SIZE_16);
 
 	dst = ((hdmi->aud_param.aud_input_type == HDMI_AUD_INPUT_SPDIF) &&
 	       (hdmi->aud_param.aud_codec == HDMI_AUDIO_CODING_TYPE_DST));
@@ -981,7 +971,7 @@ static int mtk_hdmi_setup_avi_infoframe(struct mtk_hdmi *hdmi,
 	u8 buffer[17];
 	ssize_t err;
 
-	err = drm_hdmi_avi_infoframe_from_display_mode(&frame, mode, false);
+	err = drm_hdmi_avi_infoframe_from_display_mode(&frame, mode);
 	if (err < 0) {
 		dev_err(hdmi->dev,
 			"Failed to get AVI infoframe from mode: %zd\n", err);
@@ -1060,8 +1050,7 @@ static int mtk_hdmi_setup_vendor_specific_infoframe(struct mtk_hdmi *hdmi,
 	u8 buffer[10];
 	ssize_t err;
 
-	err = drm_hdmi_vendor_infoframe_from_display_mode(&frame,
-							  &hdmi->conn, mode);
+	err = drm_hdmi_vendor_infoframe_from_display_mode(&frame, mode);
 	if (err) {
 		dev_err(hdmi->dev,
 			"Failed to get vendor infoframe from mode: %zd\n", err);
@@ -1069,7 +1058,7 @@ static int mtk_hdmi_setup_vendor_specific_infoframe(struct mtk_hdmi *hdmi,
 	}
 
 	err = hdmi_vendor_infoframe_pack(&frame, buffer, sizeof(buffer));
-	if (err < 0) {
+	if (err) {
 		dev_err(hdmi->dev, "Failed to pack vendor infoframe: %zd\n",
 			err);
 		return err;
@@ -1087,27 +1076,27 @@ static int mtk_hdmi_output_init(struct mtk_hdmi *hdmi)
 	aud_param->aud_codec = HDMI_AUDIO_CODING_TYPE_PCM;
 	aud_param->aud_sampe_size = HDMI_AUDIO_SAMPLE_SIZE_16;
 	aud_param->aud_input_type = HDMI_AUD_INPUT_I2S;
-	aud_param->aud_i2s_fmt = HDMI_I2S_MODE_I2S_24BIT;
+	aud_param->aud_i2s_fmt = HDMI_I2S_MODE_I2S_16BIT;
 	aud_param->aud_mclk = HDMI_AUD_MCLK_128FS;
 	aud_param->aud_input_chan_type = HDMI_AUD_CHAN_TYPE_2_0;
 
 	return 0;
 }
 
-static void mtk_hdmi_audio_enable(struct mtk_hdmi *hdmi)
+void mtk_hdmi_audio_enable(struct mtk_hdmi *hdmi)
 {
 	mtk_hdmi_aud_enable_packet(hdmi, true);
 	hdmi->audio_enable = true;
 }
 
-static void mtk_hdmi_audio_disable(struct mtk_hdmi *hdmi)
+void mtk_hdmi_audio_disable(struct mtk_hdmi *hdmi)
 {
 	mtk_hdmi_aud_enable_packet(hdmi, false);
 	hdmi->audio_enable = false;
 }
 
-static int mtk_hdmi_audio_set_param(struct mtk_hdmi *hdmi,
-				    struct hdmi_audio_param *param)
+int mtk_hdmi_audio_set_param(struct mtk_hdmi *hdmi,
+			     struct hdmi_audio_param *param)
 {
 	if (!hdmi->audio_enable) {
 		dev_err(hdmi->dev, "hdmi audio is in disable state!\n");
@@ -1140,7 +1129,6 @@ static int mtk_hdmi_output_set_display_mode(struct mtk_hdmi *hdmi,
 
 	phy_power_on(hdmi->phy);
 	mtk_hdmi_aud_output_config(hdmi, mode);
-
 	mtk_hdmi_hw_vid_black(hdmi, false);
 	mtk_hdmi_hw_aud_unmute(hdmi);
 	mtk_hdmi_hw_send_av_unmute(hdmi);
@@ -1211,6 +1199,19 @@ static void hdmi_conn_destroy(struct drm_connector *conn)
 	drm_connector_cleanup(conn);
 }
 
+static int mtk_hdmi_get_phy_addr(struct mtk_hdmi *hdmi, u8 *edid, int len)
+{
+	int err;
+
+	err = mtk_cec_get_phy_addr(hdmi->cec_dev, edid, len);
+	if (err < 0) {
+		dev_err(hdmi->dev, "get cec physical address fail\n");
+		return err;
+	};
+
+	return 0;
+}
+
 static int mtk_hdmi_conn_get_modes(struct drm_connector *conn)
 {
 	struct mtk_hdmi *hdmi = hdmi_ctx_from_conn(conn);
@@ -1224,12 +1225,15 @@ static int mtk_hdmi_conn_get_modes(struct drm_connector *conn)
 	if (!edid)
 		return -ENODEV;
 
-	hdmi->dvi_mode = !drm_detect_monitor_audio(edid);
+	DRM_DEBUG("\n");
 
-	drm_connector_update_edid_property(conn, edid);
+	hdmi->dvi_mode = !drm_detect_hdmi_monitor(edid);
+	drm_mode_connector_update_edid_property(conn, edid);
 
 	ret = drm_add_edid_modes(conn, edid);
+	drm_edid_to_eld(conn, edid);
 	kfree(edid);
+
 	return ret;
 }
 
@@ -1267,6 +1271,7 @@ static struct drm_encoder *mtk_hdmi_conn_best_enc(struct drm_connector *conn)
 }
 
 static const struct drm_connector_funcs mtk_hdmi_connector_funcs = {
+	.dpms = drm_atomic_helper_connector_dpms,
 	.detect = hdmi_conn_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = hdmi_conn_destroy,
@@ -1285,10 +1290,27 @@ static const struct drm_connector_helper_funcs
 static void mtk_hdmi_hpd_event(bool hpd, struct device *dev)
 {
 	struct mtk_hdmi *hdmi = dev_get_drvdata(dev);
+	struct edid *edid = NULL;
+	int ret;
+
+	if (hpd) {
+		edid = drm_get_edid(&hdmi->conn, hdmi->ddc_adpt);
+		if (edid != NULL) {
+			ret = mtk_hdmi_get_phy_addr(hdmi, (u8 *)edid,
+				EDID_LENGTH * (1 + (edid->extensions)));
+			if (ret < 0)
+				dev_err(hdmi->dev, "Get physical address fail\n");
+			hdmi->dvi_mode = !drm_detect_hdmi_monitor(edid);
+			dev_err(hdmi->dev, "Connecter mode is hdmi: %d\n",
+                               !hdmi->dvi_mode);
+			mtk_hdmi_hw_enable_dvi_mode(hdmi, hdmi->dvi_mode);
+		}
+	}
 
 	if (hdmi && hdmi->bridge.encoder && hdmi->bridge.encoder->dev)
 		drm_helper_hpd_irq_event(hdmi->bridge.encoder->dev);
 }
+
 
 /*
  * Bridge callbacks
@@ -1298,6 +1320,8 @@ static int mtk_hdmi_bridge_attach(struct drm_bridge *bridge)
 {
 	struct mtk_hdmi *hdmi = hdmi_ctx_from_bridge(bridge);
 	int ret;
+
+	dev_err(hdmi->dev, "%s\n",__func__);
 
 	ret = drm_connector_init(bridge->encoder->dev, &hdmi->conn,
 				 &mtk_hdmi_connector_funcs,
@@ -1312,7 +1336,7 @@ static int mtk_hdmi_bridge_attach(struct drm_bridge *bridge)
 	hdmi->conn.interlace_allowed = true;
 	hdmi->conn.doublescan_allowed = false;
 
-	ret = drm_connector_attach_encoder(&hdmi->conn,
+	ret = drm_mode_connector_attach_encoder(&hdmi->conn,
 						bridge->encoder);
 	if (ret) {
 		dev_err(hdmi->dev,
@@ -1320,9 +1344,9 @@ static int mtk_hdmi_bridge_attach(struct drm_bridge *bridge)
 		return ret;
 	}
 
-	if (hdmi->next_bridge) {
-		ret = drm_bridge_attach(bridge->encoder, hdmi->next_bridge,
-					bridge);
+	if (bridge->next) {
+		bridge->next->encoder = bridge->encoder;
+		ret = drm_bridge_attach(bridge->encoder->dev, bridge->next);
 		if (ret) {
 			dev_err(hdmi->dev,
 				"Failed to attach external bridge: %d\n", ret);
@@ -1365,6 +1389,9 @@ static void mtk_hdmi_bridge_post_disable(struct drm_bridge *bridge)
 
 	mtk_hdmi_hw_1p4_version_enable(hdmi, true);
 	mtk_hdmi_hw_make_reg_writable(hdmi, false);
+	gpio_set_value(hdmi_power_pin,0);
+	mtk_cec_htplg_irq_control(hdmi->cec_dev, false);
+	printk("mtk_hdmi_bridge_post_disable\n");
 
 	hdmi->powered = false;
 }
@@ -1397,12 +1424,13 @@ static void mtk_hdmi_bridge_pre_enable(struct drm_bridge *bridge)
 
 	mtk_hdmi_hw_make_reg_writable(hdmi, true);
 	mtk_hdmi_hw_1p4_version_enable(hdmi, true);
-
+	gpio_set_value(hdmi_power_pin,1);
+	mtk_cec_htplg_irq_control(hdmi->cec_dev, true);
+	printk("mtk_hdmi_bridge_pre_enable\n");
 	hdmi->powered = true;
 }
 
-static void mtk_hdmi_send_infoframe(struct mtk_hdmi *hdmi,
-				    struct drm_display_mode *mode)
+static void mtk_hdmi_send_infoframe(struct mtk_hdmi *hdmi, struct drm_display_mode *mode)
 {
 	mtk_hdmi_setup_audio_infoframe(hdmi);
 	mtk_hdmi_setup_avi_infoframe(hdmi, mode);
@@ -1415,10 +1443,10 @@ static void mtk_hdmi_bridge_enable(struct drm_bridge *bridge)
 {
 	struct mtk_hdmi *hdmi = hdmi_ctx_from_bridge(bridge);
 
+	phy_power_on(hdmi->phy);
 	mtk_hdmi_output_set_display_mode(hdmi, &hdmi->mode);
 	clk_prepare_enable(hdmi->clk[MTK_HDMI_CLK_HDMI_PLL]);
 	clk_prepare_enable(hdmi->clk[MTK_HDMI_CLK_HDMI_PIXEL]);
-	phy_power_on(hdmi->phy);
 	mtk_hdmi_send_infoframe(hdmi, &hdmi->mode);
 
 	hdmi->enabled = true;
@@ -1439,7 +1467,7 @@ static int mtk_hdmi_dt_parse_pdata(struct mtk_hdmi *hdmi,
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
-	struct device_node *cec_np, *remote, *i2c_np;
+	struct device_node *cec_np, *port, *ep, *remote, *i2c_np;
 	struct platform_device *cec_pdev;
 	struct regmap *regmap;
 	struct resource *mem;
@@ -1452,7 +1480,8 @@ static int mtk_hdmi_dt_parse_pdata(struct mtk_hdmi *hdmi,
 	}
 
 	/* The CEC module handles HDMI hotplug detection */
-	cec_np = of_get_compatible_child(np->parent, "mediatek,mt8173-cec");
+	cec_np = of_find_compatible_node(np->parent, NULL,
+					 "mediatek,mt8173-cec");
 	if (!cec_np) {
 		dev_err(dev, "Failed to find CEC node\n");
 		return -EINVAL;
@@ -1460,12 +1489,10 @@ static int mtk_hdmi_dt_parse_pdata(struct mtk_hdmi *hdmi,
 
 	cec_pdev = of_find_device_by_node(cec_np);
 	if (!cec_pdev) {
-		dev_err(hdmi->dev, "Waiting for CEC device %pOF\n",
-			cec_np);
-		of_node_put(cec_np);
+		dev_err(hdmi->dev, "Waiting for CEC device %s\n",
+			cec_np->full_name);
 		return -EPROBE_DEFER;
 	}
-	of_node_put(cec_np);
 	hdmi->cec_dev = &cec_pdev->dev;
 
 	/*
@@ -1492,13 +1519,37 @@ static int mtk_hdmi_dt_parse_pdata(struct mtk_hdmi *hdmi,
 	if (IS_ERR(hdmi->regs))
 		return PTR_ERR(hdmi->regs);
 
-	remote = of_graph_get_remote_node(np, 1, 0);
-	if (!remote)
+	port = of_graph_get_port_by_id(np, 1);
+	if (!port) {
+		i2c_np = of_parse_phandle(np, "ddc-i2c-bus", 0);
+		if (!i2c_np) {
+			dev_err(dev, "Failed to find ddc-i2c-bus node\n");
+			return -EINVAL;
+		}
+		goto find_ddc_adpt;
+	}
+
+	ep = of_get_child_by_name(port, "endpoint");
+	if (!ep) {
+		dev_err(dev, "Missing endpoint node in port %s\n",
+			port->full_name);
+		of_node_put(port);
 		return -EINVAL;
+	}
+	of_node_put(port);
+
+	remote = of_graph_get_remote_port_parent(ep);
+	if (!remote) {
+		dev_err(dev, "Missing connector/bridge node for endpoint %s\n",
+			ep->full_name);
+		of_node_put(ep);
+		return -EINVAL;
+	}
+	of_node_put(ep);
 
 	if (!of_device_is_compatible(remote, "hdmi-connector")) {
-		hdmi->next_bridge = of_drm_find_bridge(remote);
-		if (!hdmi->next_bridge) {
+		hdmi->bridge.next = of_drm_find_bridge(remote);
+		if (!hdmi->bridge.next) {
 			dev_err(dev, "Waiting for external bridge\n");
 			of_node_put(remote);
 			return -EPROBE_DEFER;
@@ -1507,13 +1558,14 @@ static int mtk_hdmi_dt_parse_pdata(struct mtk_hdmi *hdmi,
 
 	i2c_np = of_parse_phandle(remote, "ddc-i2c-bus", 0);
 	if (!i2c_np) {
-		dev_err(dev, "Failed to find ddc-i2c-bus node in %pOF\n",
-			remote);
+		dev_err(dev, "Failed to find ddc-i2c-bus node in %s\n",
+			remote->full_name);
 		of_node_put(remote);
 		return -EINVAL;
 	}
 	of_node_put(remote);
 
+find_ddc_adpt:
 	hdmi->ddc_adpt = of_find_i2c_adapter_by_node(i2c_np);
 	if (!hdmi->ddc_adpt) {
 		dev_err(dev, "Failed to get ddc i2c adapter by node\n");
@@ -1528,15 +1580,16 @@ static int mtk_hdmi_dt_parse_pdata(struct mtk_hdmi *hdmi,
  */
 
 static int mtk_hdmi_audio_hw_params(struct device *dev, void *data,
-				    struct hdmi_codec_daifmt *daifmt,
-				    struct hdmi_codec_params *params)
+		 struct hdmi_codec_daifmt *fmt,
+		 struct hdmi_codec_params *hparms)
 {
 	struct mtk_hdmi *hdmi = dev_get_drvdata(dev);
 	struct hdmi_audio_param hdmi_params;
-	unsigned int chan = params->cea.channels;
+	unsigned int chan = hparms->cea.channels;
 
-	dev_dbg(hdmi->dev, "%s: %u Hz, %d bit, %d channels\n", __func__,
-		params->sample_rate, params->sample_width, chan);
+	dev_dbg(hdmi->dev, "%s: %u Hz, %d bit, %d channels, fmt=%d\n", __func__,
+		hparms->sample_rate, hparms->sample_width, chan, fmt->fmt);
+
 
 	if (!hdmi->bridge.encoder)
 		return -ENODEV;
@@ -1559,7 +1612,7 @@ static int mtk_hdmi_audio_hw_params(struct device *dev, void *data,
 		return -EINVAL;
 	}
 
-	switch (params->sample_rate) {
+	switch (hparms->sample_rate) {
 	case 32000:
 	case 44100:
 	case 48000:
@@ -1570,16 +1623,16 @@ static int mtk_hdmi_audio_hw_params(struct device *dev, void *data,
 		break;
 	default:
 		dev_err(hdmi->dev, "rate[%d] not supported!\n",
-			params->sample_rate);
+			hparms->sample_rate);
 		return -EINVAL;
 	}
 
-	switch (daifmt->fmt) {
+	switch (fmt->fmt) {
 	case HDMI_I2S:
 		hdmi_params.aud_codec = HDMI_AUDIO_CODING_TYPE_PCM;
 		hdmi_params.aud_sampe_size = HDMI_AUDIO_SAMPLE_SIZE_16;
 		hdmi_params.aud_input_type = HDMI_AUD_INPUT_I2S;
-		hdmi_params.aud_i2s_fmt = HDMI_I2S_MODE_I2S_24BIT;
+		hdmi_params.aud_i2s_fmt = HDMI_I2S_MODE_I2S_16BIT;
 		hdmi_params.aud_mclk = HDMI_AUD_MCLK_128FS;
 		break;
 	case HDMI_SPDIF:
@@ -1589,11 +1642,11 @@ static int mtk_hdmi_audio_hw_params(struct device *dev, void *data,
 		break;
 	default:
 		dev_err(hdmi->dev, "%s: Invalid DAI format %d\n", __func__,
-			daifmt->fmt);
+			fmt->fmt);
 		return -EINVAL;
 	}
 
-	memcpy(&hdmi_params.codec_params, params,
+	memcpy(&hdmi_params.codec_params, hparms,
 	       sizeof(hdmi_params.codec_params));
 
 	mtk_hdmi_audio_set_param(hdmi, &hdmi_params);
@@ -1621,8 +1674,7 @@ static void mtk_hdmi_audio_shutdown(struct device *dev, void *data)
 	mtk_hdmi_audio_disable(hdmi);
 }
 
-static int
-mtk_hdmi_audio_digital_mute(struct device *dev, void *data, bool enable)
+int mtk_hdmi_audio_digital_mute(struct device *dev, void *data, bool enable)
 {
 	struct mtk_hdmi *hdmi = dev_get_drvdata(dev);
 
@@ -1636,7 +1688,9 @@ mtk_hdmi_audio_digital_mute(struct device *dev, void *data, bool enable)
 	return 0;
 }
 
-static int mtk_hdmi_audio_get_eld(struct device *dev, void *data, uint8_t *buf, size_t len)
+static int mtk_hdmi_audio_get_eld(struct device *dev, void *data,
+		   uint8_t *buf, size_t len)
+
 {
 	struct mtk_hdmi *hdmi = dev_get_drvdata(dev);
 
@@ -1661,16 +1715,17 @@ static void mtk_hdmi_register_audio_driver(struct device *dev)
 		.ops = &mtk_hdmi_audio_codec_ops,
 		.max_i2s_channels = 2,
 		.i2s = 1,
+		.spdif = 1,
 	};
-	struct platform_device *pdev;
+	static struct platform_device *pdev;
 
-	pdev = platform_device_register_data(dev, HDMI_CODEC_DRV_NAME,
-					     PLATFORM_DEVID_AUTO, &codec_data,
-					     sizeof(codec_data));
-	if (IS_ERR(pdev))
-		return;
-
-	DRM_INFO("%s driver bound to HDMI\n", HDMI_CODEC_DRV_NAME);
+	if (pdev == NULL) {
+		pdev = platform_device_register_data(dev, HDMI_CODEC_DRV_NAME,
+			     PLATFORM_DEVID_NONE, &codec_data,
+			     sizeof(codec_data));
+		DRM_INFO("%s driver bound to HDMI\n", HDMI_CODEC_DRV_NAME);
+	}
+	return;
 }
 
 static int mtk_drm_hdmi_probe(struct platform_device *pdev)
@@ -1679,11 +1734,14 @@ static int mtk_drm_hdmi_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	int ret;
 
+	dev_err(dev, "%s\n",__func__);
+
 	hdmi = devm_kzalloc(dev, sizeof(*hdmi), GFP_KERNEL);
 	if (!hdmi)
 		return -ENOMEM;
 
 	hdmi->dev = dev;
+	mtk_hdmi_register_audio_driver(dev);
 
 	ret = mtk_hdmi_dt_parse_pdata(hdmi, pdev);
 	if (ret)
@@ -1704,11 +1762,13 @@ static int mtk_drm_hdmi_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	mtk_hdmi_register_audio_driver(dev);
-
 	hdmi->bridge.funcs = &mtk_hdmi_bridge_funcs;
 	hdmi->bridge.of_node = pdev->dev.of_node;
-	drm_bridge_add(&hdmi->bridge);
+	ret = drm_bridge_add(&hdmi->bridge);
+	if (ret) {
+		dev_err(dev, "failed to add bridge, ret = %d\n", ret);
+		return ret;
+	}
 
 	ret = mtk_hdmi_clk_enable_audio(hdmi);
 	if (ret) {
@@ -1785,14 +1845,33 @@ static struct platform_driver * const mtk_hdmi_drivers[] = {
 
 static int __init mtk_hdmitx_init(void)
 {
-	return platform_register_drivers(mtk_hdmi_drivers,
-					 ARRAY_SIZE(mtk_hdmi_drivers));
+	int ret;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(mtk_hdmi_drivers); i++) {
+		ret = platform_driver_register(mtk_hdmi_drivers[i]);
+		if (ret < 0) {
+			pr_err("Failed to register %s driver: %d\n",
+			       mtk_hdmi_drivers[i]->driver.name, ret);
+			goto err;
+		}
+	}
+	gpio_set_value(hdmi_power_pin,0);
+	return 0;
+
+err:
+	while (--i >= 0)
+		platform_driver_unregister(mtk_hdmi_drivers[i]);
+
+	return ret;
 }
 
 static void __exit mtk_hdmitx_exit(void)
 {
-	platform_unregister_drivers(mtk_hdmi_drivers,
-				    ARRAY_SIZE(mtk_hdmi_drivers));
+	int i;
+
+	for (i = ARRAY_SIZE(mtk_hdmi_drivers) - 1; i >= 0; i--)
+		platform_driver_unregister(mtk_hdmi_drivers[i]);
 }
 
 module_init(mtk_hdmitx_init);

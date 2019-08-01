@@ -16,7 +16,6 @@
 #include <linux/slab.h>
 #include <linux/compat.h>
 #include <linux/uaccess.h>
-#include <linux/iversion.h>
 #include "fat.h"
 
 /*
@@ -92,7 +91,7 @@ next:
 
 	*bh = NULL;
 	iblock = *pos >> sb->s_blocksize_bits;
-	err = fat_bmap(dir, iblock, &phys, &mapped_blocks, 0, false);
+	err = fat_bmap(dir, iblock, &phys, &mapped_blocks, 0);
 	if (err || !phys)
 		return -1;	/* beyond EOF or error */
 
@@ -292,6 +291,7 @@ static int fat_parse_long(struct inode *dir, loff_t *pos,
 		}
 	}
 parse_long:
+	slots = 0;
 	ds = (struct msdos_dir_slot *)*de;
 	id = ds->id;
 	if (!(id & 0x40))
@@ -369,9 +369,7 @@ static int fat_parse_short(struct super_block *sb,
 	}
 
 	memcpy(work, de->name, sizeof(work));
-	/* For an explanation of the special treatment of 0x05 in
-	 * filenames, see msdos_format_name in namei_msdos.c
-	 */
+	/* see namei.c, msdos_format_name */
 	if (work[0] == 0x05)
 		work[0] = 0xE5;
 
@@ -771,7 +769,7 @@ static int fat_ioctl_readdir(struct inode *inode, struct file *file,
 
 	buf.dirent = dirent;
 	buf.result = 0;
-	inode_lock_shared(inode);
+	mutex_lock(&inode->i_mutex);
 	buf.ctx.pos = file->f_pos;
 	ret = -ENOENT;
 	if (!IS_DEADDIR(inode)) {
@@ -779,7 +777,7 @@ static int fat_ioctl_readdir(struct inode *inode, struct file *file,
 				    short_only, both ? &buf : NULL);
 		file->f_pos = buf.ctx.pos;
 	}
-	inode_unlock_shared(inode);
+	mutex_unlock(&inode->i_mutex);
 	if (ret >= 0)
 		ret = buf.result;
 	return ret;
@@ -863,7 +861,7 @@ static long fat_compat_dir_ioctl(struct file *filp, unsigned cmd,
 const struct file_operations fat_dir_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_read_dir,
-	.iterate_shared	= fat_readdir,
+	.iterate	= fat_readdir,
 	.unlocked_ioctl	= fat_dir_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= fat_compat_dir_ioctl,
@@ -1058,7 +1056,7 @@ int fat_remove_entries(struct inode *dir, struct fat_slot_info *sinfo)
 	brelse(bh);
 	if (err)
 		return err;
-	inode_inc_iversion(dir);
+	dir->i_version++;
 
 	if (nr_slots) {
 		/*
@@ -1073,7 +1071,7 @@ int fat_remove_entries(struct inode *dir, struct fat_slot_info *sinfo)
 		}
 	}
 
-	fat_truncate_time(dir, NULL, S_ATIME|S_MTIME);
+	dir->i_mtime = dir->i_atime = CURRENT_TIME_SEC;
 	if (IS_DIRSYNC(dir))
 		(void)fat_sync_inode(dir);
 	else
@@ -1132,7 +1130,7 @@ error:
 	return err;
 }
 
-int fat_alloc_new_dir(struct inode *dir, struct timespec64 *ts)
+int fat_alloc_new_dir(struct inode *dir, struct timespec *ts)
 {
 	struct super_block *sb = dir->i_sb;
 	struct msdos_sb_info *sbi = MSDOS_SB(sb);

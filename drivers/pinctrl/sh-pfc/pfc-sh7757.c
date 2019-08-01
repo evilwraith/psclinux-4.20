@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * SH7757 (B0 step) Pinmux
  *
@@ -8,6 +7,10 @@
  *
  * Based on SH7723 Pinmux
  *  Copyright (C) 2008  Magnus Damm
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  */
 
 #include <linux/init.h>
@@ -1622,6 +1625,7 @@ static const struct pinmux_func pinmux_func_gpios[] = {
 	GPIO_FN(VBIOS_CS),
 
 	/* PTW (mobule: LBSC, EVC, SCIF) */
+	GPIO_FN(A16),
 	GPIO_FN(A15),
 	GPIO_FN(A14),
 	GPIO_FN(A13),

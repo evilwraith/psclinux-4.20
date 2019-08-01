@@ -511,7 +511,7 @@ static inline void hdlc_putbyte(unsigned char c, struct bc_state *bcs)
 		bcs->rx_skb = NULL;
 		return;
 	}
-	__skb_put_u8(bcs->rx_skb, c);
+	*__skb_put(bcs->rx_skb, 1) = c;
 }
 
 /* hdlc_flush
@@ -906,7 +906,7 @@ static void cmd_loop(unsigned char *src, int numbytes, struct inbuf_t *inbuf)
 				cs->respdata[0] = 0;
 				break;
 			}
-			/* fall through */
+			/* --v-- fall through --v-- */
 		case '\r':
 			/* end of message line, pass to response handler */
 			if (cbytes >= MAX_RESP_SIZE) {
