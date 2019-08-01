@@ -35,7 +35,7 @@
 #include <sound/core.h>
 #include <sound/initval.h>
 
-#include "hda_codec.h"
+#include <sound/hda_codec.h>
 #include "hda_controller.h"
 
 /* Defines for Nvidia Tegra HDA support */
@@ -99,36 +99,23 @@ static void dma_free_pages(struct hdac_bus *bus, struct snd_dma_buffer *buf)
 	snd_dma_free_pages(buf);
 }
 
-static int substream_alloc_pages(struct azx *chip,
-				 struct snd_pcm_substream *substream,
-				 size_t size)
-{
-	return snd_pcm_lib_malloc_pages(substream, size);
-}
-
-static int substream_free_pages(struct azx *chip,
-				struct snd_pcm_substream *substream)
-{
-	return snd_pcm_lib_free_pages(substream);
-}
-
 /*
  * Register access ops. Tegra HDA register access is DWORD only.
  */
-static void hda_tegra_writel(u32 value, u32 *addr)
+static void hda_tegra_writel(u32 value, u32 __iomem *addr)
 {
 	writel(value, addr);
 }
 
-static u32 hda_tegra_readl(u32 *addr)
+static u32 hda_tegra_readl(u32 __iomem *addr)
 {
 	return readl(addr);
 }
 
-static void hda_tegra_writew(u16 value, u16 *addr)
+static void hda_tegra_writew(u16 value, u16 __iomem  *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
@@ -137,20 +124,20 @@ static void hda_tegra_writew(u16 value, u16 *addr)
 	writel(v, dword_addr);
 }
 
-static u16 hda_tegra_readw(u16 *addr)
+static u16 hda_tegra_readw(u16 __iomem *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
 	return (v >> shift) & 0xffff;
 }
 
-static void hda_tegra_writeb(u8 value, u8 *addr)
+static void hda_tegra_writeb(u8 value, u8 __iomem *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
@@ -159,10 +146,10 @@ static void hda_tegra_writeb(u8 value, u8 *addr)
 	writel(v, dword_addr);
 }
 
-static u8 hda_tegra_readb(u8 *addr)
+static u8 hda_tegra_readb(u8 __iomem *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
@@ -180,10 +167,7 @@ static const struct hdac_io_ops hda_tegra_io_ops = {
 	.dma_free_pages = dma_free_pages,
 };
 
-static const struct hda_controller_ops hda_tegra_ops = {
-	.substream_alloc_pages = substream_alloc_pages,
-	.substream_free_pages = substream_free_pages,
-};
+static const struct hda_controller_ops hda_tegra_ops; /* nothing special */
 
 static void hda_tegra_init(struct hda_tegra *hda)
 {
@@ -464,6 +448,8 @@ static int hda_tegra_create(struct snd_card *card,
 	if (err < 0)
 		return err;
 
+	chip->bus.needs_damn_long_delay = 1;
+
 	err = snd_device_new(card, SNDRV_DEV_LOWLEVEL, chip, &ops);
 	if (err < 0) {
 		dev_err(card->dev, "Error creating device\n");
@@ -481,8 +467,7 @@ MODULE_DEVICE_TABLE(of, hda_tegra_match);
 
 static int hda_tegra_probe(struct platform_device *pdev)
 {
-	const unsigned int driver_flags = AZX_DCAPS_RIRB_DELAY |
-					  AZX_DCAPS_CORBRP_SELF_CLEAR;
+	const unsigned int driver_flags = AZX_DCAPS_CORBRP_SELF_CLEAR;
 	struct snd_card *card;
 	struct azx *chip;
 	struct hda_tegra *hda;

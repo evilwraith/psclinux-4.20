@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * arch/arm/mach-sa1100/include/mach/memory.h
  *
@@ -24,7 +25,7 @@
  * 	node 3:  0xd8000000 - 0xdfffffff
  */
 #define MAX_PHYSMEM_BITS	32
-#define SECTION_SIZE_BITS	26
+#define SECTION_SIZE_BITS	27
 
 /*
  * Cache flushing area - SA1100 zero bank

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *  linux/include/asm/setup.h
  *
@@ -141,29 +142,6 @@ struct tag_acorn {
 
 struct tag_memclk {
 	__u32 fmemclk;
-};
-
-/* general memory descriptor */
-struct mem_desc {
-	u64 start;
-	u64 size;
-};
-
-/* mblock is used by CPU */
-struct mblock {
-	u64 start;
-	u64 size;
-	u32 rank;	/* rank the mblock belongs to */
-};
-
-struct mblock_info {
-	u32 mblock_num;
-	struct mblock mblock[128];
-};
-
-struct dram_info {
-	u32 rank_num;
-	struct mem_desc rank_info[4];
 };
 
 struct tag {

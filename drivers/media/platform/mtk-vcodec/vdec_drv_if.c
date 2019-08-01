@@ -21,9 +21,11 @@
 #include "mtk_vcodec_dec.h"
 #include "vdec_drv_base.h"
 #include "mtk_vcodec_dec_pm.h"
-#include "mtk_vcu.h"
+#include "mtk_vpu.h"
 
-struct vdec_common_if *get_dec_common_if(void);
+const struct vdec_common_if *get_h264_dec_comm_if(void);
+const struct vdec_common_if *get_vp8_dec_comm_if(void);
+const struct vdec_common_if *get_vp9_dec_comm_if(void);
 
 int vdec_if_init(struct mtk_vcodec_ctx *ctx, unsigned int fourcc)
 {
@@ -31,27 +33,13 @@ int vdec_if_init(struct mtk_vcodec_ctx *ctx, unsigned int fourcc)
 
 	switch (fourcc) {
 	case V4L2_PIX_FMT_H264:
-	case V4L2_PIX_FMT_H265:
-	case V4L2_PIX_FMT_MPEG1:
-	case V4L2_PIX_FMT_MPEG2:
-	case V4L2_PIX_FMT_MPEG4:
-	case V4L2_PIX_FMT_H263:
-	case V4L2_PIX_FMT_S263:
-	case V4L2_PIX_FMT_XVID:
-	case V4L2_PIX_FMT_DIVX3:
-	case V4L2_PIX_FMT_DIVX4:
-	case V4L2_PIX_FMT_DIVX5:
-	case V4L2_PIX_FMT_DIVX6:
+		ctx->dec_if = get_h264_dec_comm_if();
+		break;
 	case V4L2_PIX_FMT_VP8:
+		ctx->dec_if = get_vp8_dec_comm_if();
+		break;
 	case V4L2_PIX_FMT_VP9:
-	case V4L2_PIX_FMT_WMV1:
-	case V4L2_PIX_FMT_WMV2:
-	case V4L2_PIX_FMT_WMV3:
-	case V4L2_PIX_FMT_WVC1:
-	case V4L2_PIX_FMT_WMVA:
-	case V4L2_PIX_FMT_RV30:
-	case V4L2_PIX_FMT_RV40:
-		ctx->dec_if = get_dec_common_if();
+		ctx->dec_if = get_vp9_dec_comm_if();
 		break;
 	default:
 		return -EINVAL;
@@ -67,24 +55,22 @@ int vdec_if_init(struct mtk_vcodec_ctx *ctx, unsigned int fourcc)
 }
 
 int vdec_if_decode(struct mtk_vcodec_ctx *ctx, struct mtk_vcodec_mem *bs,
-		   struct vdec_fb *fb, unsigned int *src_chg)
+		   struct vdec_fb *fb, bool *res_chg)
 {
 	int ret = 0;
-	unsigned int i = 0;
 
 	if (bs) {
-		if ((bs->dma_addr & 63UL) != 0UL) {
+		if ((bs->dma_addr & 63) != 0) {
 			mtk_v4l2_err("bs dma_addr should 64 byte align");
 			return -EINVAL;
 		}
 	}
 
 	if (fb) {
-		for (i = 0; i < fb->num_planes; i++) {
-			if ((fb->fb_base[i].dma_addr & 511UL) != 0UL) {
-				mtk_v4l2_err("fb addr should 512 byte align");
-				return -EINVAL;
-			}
+		if (((fb->base_y.dma_addr & 511) != 0) ||
+		    ((fb->base_c.dma_addr & 511) != 0)) {
+			mtk_v4l2_err("frame buffer dma_addr should 512 byte align");
+			return -EINVAL;
 		}
 	}
 
@@ -96,7 +82,7 @@ int vdec_if_decode(struct mtk_vcodec_ctx *ctx, struct mtk_vcodec_mem *bs,
 	mtk_vcodec_set_curr_ctx(ctx->dev, ctx);
 	mtk_vcodec_dec_clock_on(&ctx->dev->pm);
 	enable_irq(ctx->dev->dec_irq);
-	ret = ctx->dec_if->decode(ctx->drv_handle, bs, fb, src_chg);
+	ret = ctx->dec_if->decode(ctx->drv_handle, bs, fb, res_chg);
 	disable_irq(ctx->dev->dec_irq);
 	mtk_vcodec_dec_clock_off(&ctx->dev->pm);
 	mtk_vcodec_set_curr_ctx(ctx->dev, NULL);
@@ -116,18 +102,6 @@ int vdec_if_get_param(struct mtk_vcodec_ctx *ctx, enum vdec_get_param_type type,
 
 	mtk_vdec_lock(ctx);
 	ret = ctx->dec_if->get_param(ctx->drv_handle, type, out);
-	mtk_vdec_unlock(ctx);
-
-	return ret;
-}
-
-int vdec_if_set_param(struct mtk_vcodec_ctx *ctx, enum vdec_set_param_type type,
-		      void *in)
-{
-	int ret = 0;
-
-	mtk_vdec_lock(ctx);
-	ret = ctx->dec_if->set_param(ctx->drv_handle, type, in);
 	mtk_vdec_unlock(ctx);
 
 	return ret;

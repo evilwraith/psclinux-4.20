@@ -25,7 +25,6 @@
 static const char * const mtk_mdp_comp_stem[MTK_MDP_COMP_TYPE_MAX] = {
 	"mdp_rdma",
 	"mdp_rsz",
-	"mdp_tdshp",
 	"mdp_wdma",
 	"mdp_wrot",
 };
@@ -38,18 +37,12 @@ struct mtk_mdp_comp_match {
 static const struct mtk_mdp_comp_match mtk_mdp_matches[MTK_MDP_COMP_ID_MAX] = {
 	{ MTK_MDP_RDMA,	0 },
 	{ MTK_MDP_RDMA,	1 },
-	{ MTK_MDP_RDMA,	2 },
-	{ MTK_MDP_RDMA,	3 },
 	{ MTK_MDP_RSZ,	0 },
 	{ MTK_MDP_RSZ,	1 },
 	{ MTK_MDP_RSZ,	2 },
-	{ MTK_MDP_TDSHP, 0 },
-	{ MTK_MDP_TDSHP, 1 },
-	{ MTK_MDP_TDSHP, 2 },
 	{ MTK_MDP_WDMA,	0 },
 	{ MTK_MDP_WROT,	0 },
 	{ MTK_MDP_WROT,	1 },
-	{ MTK_MDP_WROT,	2 },
 };
 
 int mtk_mdp_comp_get_id(struct device *dev, struct device_node *node,
@@ -82,7 +75,7 @@ void mtk_mdp_comp_clock_on(struct device *dev, struct mtk_mdp_comp *comp)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(comp->clk); i++) {
-		if (!comp->clk[i])
+		if (IS_ERR(comp->clk[i]))
 			continue;
 		err = clk_prepare_enable(comp->clk[i]);
 		if (err)
@@ -97,7 +90,7 @@ void mtk_mdp_comp_clock_off(struct device *dev, struct mtk_mdp_comp *comp)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(comp->clk); i++) {
-		if (!comp->clk[i])
+		if (IS_ERR(comp->clk[i]))
 			continue;
 		clk_disable_unprepare(comp->clk[i]);
 	}
@@ -141,15 +134,13 @@ int mtk_mdp_comp_init(struct device *dev, struct device_node *node,
 	larb_node = of_parse_phandle(node, "mediatek,larb", 0);
 	if (!larb_node) {
 		dev_err(dev,
-			"Missing mediadek,larb phandle in %s node\n",
-			node->full_name);
+			"Missing mediadek,larb phandle in %pOF node\n", node);
 		return -EINVAL;
 	}
 
 	larb_pdev = of_find_device_by_node(larb_node);
 	if (!larb_pdev) {
-		dev_warn(dev, "Waiting for larb device %s\n",
-			 larb_node->full_name);
+		dev_warn(dev, "Waiting for larb device %pOF\n", larb_node);
 		of_node_put(larb_node);
 		return -EPROBE_DEFER;
 	}

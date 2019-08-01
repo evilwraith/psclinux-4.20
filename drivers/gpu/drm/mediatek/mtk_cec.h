@@ -15,14 +15,12 @@
 #define _MTK_CEC_H
 
 #include <linux/types.h>
-#include <media/cec.h>
+
 struct device;
 
 void mtk_cec_set_hpd_event(struct device *dev,
 			   void (*hotplug_event)(bool hpd, struct device *dev),
 			   struct device *hdmi_dev);
 bool mtk_cec_hpd_high(struct device *dev);
-void mtk_cec_htplg_irq_control(struct device *dev , bool enable);
-int mtk_cec_get_phy_addr(struct device *dev, u8 *edid, int len);
 
 #endif /* _MTK_CEC_H */

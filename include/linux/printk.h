@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __KERNEL_PRINTK__
 #define __KERNEL_PRINTK__
 
@@ -10,55 +11,7 @@
 extern const char linux_banner[];
 extern const char linux_proc_banner[];
 
-extern char *log_buf_addr_get(void);
-extern u32 log_buf_len_get(void);
-extern bool printk_disable_uart;
-extern bool mt_get_uartlog_status(void);
-extern void set_uartlog_status(bool value);
-
-
-#ifdef CONFIG_MTK_PRINTK_UART_CONSOLE
-void mt_disable_uart(void);
-void mt_enable_uart(void);
-extern int mt_need_uart_console;
-#endif
-
-#ifdef CONFIG_MTK_AEE_FEATURE
-extern void aee_wdt_zap_locks(void);
-#endif
-
-#if defined(CONFIG_MTK_ENG_BUILD) && defined(CONFIG_PRINTK_MT_PREFIX)
-#define KLOG_MODNAME		"[name:"KBUILD_MODNAME"&]"
-#else
-#define KLOG_MODNAME		""
-#endif
-
-#if defined(CONFIG_MTK_ENG_BUILD) && defined(CONFIG_LOG_TOO_MUCH_WARNING)
-extern void set_detect_count(int count);
-extern int get_detect_count(void);
-extern void set_logtoomuch_enable(int value);
-extern int get_logtoomuch_enable(void);
-#else
-static inline void set_detect_count(int count)
-{
-
-}
-
-static inline int get_detect_count(void)
-{
-	return 0;
-}
-
-static inline void set_logtoomuch_enable(int value)
-{
-
-}
-
-static inline int get_logtoomuch_enable(void)
-{
-	return 0;
-}
-#endif
+#define PRINTK_MAX_SINGLE_HEADER_LEN 2
 
 static inline int printk_get_level(const char *buffer)
 {
@@ -66,6 +19,7 @@ static inline int printk_get_level(const char *buffer)
 		switch (buffer[1]) {
 		case '0' ... '7':
 		case 'd':	/* KERN_DEFAULT */
+		case 'c':	/* KERN_CONT */
 			return buffer[1];
 		}
 	}
@@ -80,6 +34,14 @@ static inline const char *printk_skip_level(const char *buffer)
 	return buffer;
 }
 
+static inline const char *printk_skip_headers(const char *buffer)
+{
+	while (printk_get_level(buffer))
+		buffer = printk_skip_level(buffer);
+
+	return buffer;
+}
+
 #define CONSOLE_EXT_LOG_MAX	8192
 
 /* printk's without a loglevel use this.. */
@@ -88,10 +50,15 @@ static inline const char *printk_skip_level(const char *buffer)
 /* We show everything that is MORE important than this.. */
 #define CONSOLE_LOGLEVEL_SILENT  0 /* Mum's the word */
 #define CONSOLE_LOGLEVEL_MIN	 1 /* Minimum loglevel we let people use */
-#define CONSOLE_LOGLEVEL_QUIET	 4 /* Shhh ..., when booted with "quiet" */
-#define CONSOLE_LOGLEVEL_DEFAULT 7 /* anything MORE serious than KERN_DEBUG */
 #define CONSOLE_LOGLEVEL_DEBUG	10 /* issue debug messages */
 #define CONSOLE_LOGLEVEL_MOTORMOUTH 15	/* You can't shut this one up */
+
+/*
+ * Default used to be hard-coded at 7, quiet used to be hardcoded at 4,
+ * we're now allowing both to be set from kernel config.
+ */
+#define CONSOLE_LOGLEVEL_DEFAULT CONFIG_CONSOLE_LOGLEVEL_DEFAULT
+#define CONSOLE_LOGLEVEL_QUIET	 CONFIG_CONSOLE_LOGLEVEL_QUIET
 
 extern int console_printk[];
 
@@ -110,6 +77,11 @@ static inline void console_verbose(void)
 	if (console_loglevel)
 		console_loglevel = CONSOLE_LOGLEVEL_MOTORMOUTH;
 }
+
+/* strlen("ratelimit") + 1 */
+#define DEVKMSG_STR_MAX_SIZE 10
+extern char devkmsg_log_str[];
+struct ctl_table;
 
 struct va_format {
 	const char *fmt;
@@ -156,13 +128,14 @@ struct va_format {
 
 /*
  * Dummy printk for disabled debugging statements to use whilst maintaining
- * gcc's format and side-effect checking.
+ * gcc's format checking.
  */
-static inline __printf(1, 2)
-int no_printk(const char *fmt, ...)
-{
-	return 0;
-}
+#define no_printk(fmt, ...)				\
+({							\
+	if (0)						\
+		printk(fmt, ##__VA_ARGS__);		\
+	0;						\
+})
 
 #ifdef CONFIG_EARLY_PRINTK
 extern asmlinkage __printf(1, 2)
@@ -172,7 +145,17 @@ static inline __printf(1, 2) __cold
 void early_printk(const char *s, ...) { }
 #endif
 
-typedef __printf(1, 0) int (*printk_func_t)(const char *fmt, va_list args);
+#ifdef CONFIG_PRINTK_NMI
+extern void printk_nmi_enter(void);
+extern void printk_nmi_exit(void);
+extern void printk_nmi_direct_enter(void);
+extern void printk_nmi_direct_exit(void);
+#else
+static inline void printk_nmi_enter(void) { }
+static inline void printk_nmi_exit(void) { }
+static inline void printk_nmi_direct_enter(void) { }
+static inline void printk_nmi_direct_exit(void) { }
+#endif /* PRINTK_NMI */
 
 #ifdef CONFIG_PRINTK
 asmlinkage __printf(5, 0)
@@ -208,17 +191,24 @@ extern bool printk_timed_ratelimit(unsigned long *caller_jiffies,
 
 extern int printk_delay_msec;
 extern int dmesg_restrict;
-extern int kptr_restrict;
+
+extern int
+devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write, void __user *buf,
+			  size_t *lenp, loff_t *ppos);
 
 extern void wake_up_klogd(void);
 
 char *log_buf_addr_get(void);
 u32 log_buf_len_get(void);
-void log_buf_kexec_setup(void);
+void log_buf_vmcoreinfo_setup(void);
 void __init setup_log_buf(int early);
 __printf(1, 2) void dump_stack_set_arch_desc(const char *fmt, ...);
 void dump_stack_print_info(const char *log_lvl);
 void show_regs_print_info(const char *log_lvl);
+extern asmlinkage void dump_stack(void) __cold;
+extern void printk_safe_init(void);
+extern void printk_safe_flush(void);
+extern void printk_safe_flush_on_panic(void);
 #else
 static inline __printf(1, 0)
 int vprintk(const char *s, va_list args)
@@ -259,7 +249,7 @@ static inline u32 log_buf_len_get(void)
 	return 0;
 }
 
-static inline void log_buf_kexec_setup(void)
+static inline void log_buf_vmcoreinfo_setup(void)
 {
 }
 
@@ -278,9 +268,25 @@ static inline void dump_stack_print_info(const char *log_lvl)
 static inline void show_regs_print_info(const char *log_lvl)
 {
 }
+
+static inline asmlinkage void dump_stack(void)
+{
+}
+
+static inline void printk_safe_init(void)
+{
+}
+
+static inline void printk_safe_flush(void)
+{
+}
+
+static inline void printk_safe_flush_on_panic(void)
+{
+}
 #endif
 
-extern asmlinkage void dump_stack(void) __cold;
+extern int kptr_restrict;
 
 #ifndef pr_fmt
 #define pr_fmt(fmt) fmt
@@ -292,164 +298,53 @@ extern asmlinkage void dump_stack(void) __cold;
  * and other debug macros are compiled out unless either DEBUG is defined
  * or CONFIG_DYNAMIC_DEBUG is set.
  */
-
-/* -------printk too much patch------ */
-#if defined CONFIG_MTK_ENG_BUILD && defined CONFIG_PRINTK_MT_PREFIX && defined CONFIG_DYNAMIC_DEBUG
 #define pr_emerg(fmt, ...) \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_EMERG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_EMERG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-
-
+	printk(KERN_EMERG pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_alert(fmt, ...) \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_ALERT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_ALERT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-
+	printk(KERN_ALERT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_crit(fmt, ...) \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_CRIT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_CRIT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-
-
+	printk(KERN_CRIT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_err(fmt, ...) \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_ERR KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_ERR KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-
+	printk(KERN_ERR pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_warning(fmt, ...) \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_WARNING KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_WARNING KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-
+	printk(KERN_WARNING pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_warn pr_warning
 #define pr_notice(fmt, ...) \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_NOTICE KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_NOTICE KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-
-#define pr_info(fmt, ...)          \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_INFO KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_INFO KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-
-#define pr_cont(fmt, ...) \
-({											\
-	static bool __print_once __read_mostly;	\
-	if (!__print_once) {					\
-		DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, KLOG_MODNAME fmt); \
-		if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT)) \
-			barrier();   \
-		__print_once = true;				\
-		printk(KERN_CONT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-	}	else								\
-		printk(KERN_CONT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__); \
-})
-#else
-#define pr_emerg(fmt, ...) \
-			printk(KERN_EMERG pr_fmt(fmt), ##__VA_ARGS__)
-#define pr_alert(fmt, ...) \
-			printk(KERN_ALERT pr_fmt(fmt), ##__VA_ARGS__)
-#define pr_crit(fmt, ...) \
-			printk(KERN_CRIT pr_fmt(fmt), ##__VA_ARGS__)
-#define pr_err(fmt, ...) \
-			printk(KERN_ERR pr_fmt(fmt), ##__VA_ARGS__)
-#define pr_warning(fmt, ...) \
-			printk(KERN_WARNING pr_fmt(fmt), ##__VA_ARGS__)
-#define pr_warn pr_warning
-#define pr_notice(fmt, ...) \
-			printk(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
+	printk(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_info(fmt, ...) \
-			printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
+	printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
 /*
  * Like KERN_CONT, pr_cont() should only be used when continuing
  * a line with no newline ('\n') enclosed. Otherwise it defaults
  * back to KERN_DEFAULT.
  */
 #define pr_cont(fmt, ...) \
-			printk(KERN_CONT fmt, ##__VA_ARGS__)
-#endif
+	printk(KERN_CONT fmt, ##__VA_ARGS__)
 
 /* pr_devel() should produce zero code unless DEBUG is defined */
 #ifdef DEBUG
 #define pr_devel(fmt, ...) \
-	printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #else
 #define pr_devel(fmt, ...) \
-	no_printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
 
-#include <linux/dynamic_debug.h>
 
 /* If you are writing a driver, please use dev_dbg instead */
 #if defined(CONFIG_DYNAMIC_DEBUG)
+#include <linux/dynamic_debug.h>
+
 /* dynamic_pr_debug() uses pr_fmt() internally so we don't need it here */
 #define pr_debug(fmt, ...) \
-	dynamic_pr_debug(KLOG_MODNAME fmt, ##__VA_ARGS__)
+	dynamic_pr_debug(fmt, ##__VA_ARGS__)
 #elif defined(DEBUG)
 #define pr_debug(fmt, ...) \
-	printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #else
 #define pr_debug(fmt, ...) \
-	no_printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
-
 
 /*
  * Print a one-time message (analogous to WARN_ONCE() et al):
@@ -459,20 +354,24 @@ extern asmlinkage void dump_stack(void) __cold;
 #define printk_once(fmt, ...)					\
 ({								\
 	static bool __print_once __read_mostly;			\
+	bool __ret_print_once = !__print_once;			\
 								\
 	if (!__print_once) {					\
 		__print_once = true;				\
 		printk(fmt, ##__VA_ARGS__);			\
 	}							\
+	unlikely(__ret_print_once);				\
 })
 #define printk_deferred_once(fmt, ...)				\
 ({								\
 	static bool __print_once __read_mostly;			\
+	bool __ret_print_once = !__print_once;			\
 								\
 	if (!__print_once) {					\
 		__print_once = true;				\
 		printk_deferred(fmt, ##__VA_ARGS__);		\
 	}							\
+	unlikely(__ret_print_once);				\
 })
 #else
 #define printk_once(fmt, ...)					\
@@ -482,37 +381,37 @@ extern asmlinkage void dump_stack(void) __cold;
 #endif
 
 #define pr_emerg_once(fmt, ...)					\
-	printk_once(KERN_EMERG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_EMERG pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_alert_once(fmt, ...)					\
-	printk_once(KERN_ALERT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_ALERT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_crit_once(fmt, ...)					\
-	printk_once(KERN_CRIT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_CRIT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_err_once(fmt, ...)					\
-	printk_once(KERN_ERR KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_ERR pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_warn_once(fmt, ...)					\
-	printk_once(KERN_WARNING KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_WARNING pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_notice_once(fmt, ...)				\
-	printk_once(KERN_NOTICE KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_info_once(fmt, ...)					\
-	printk_once(KERN_INFO KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_cont_once(fmt, ...)					\
-	printk_once(KERN_CONT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_CONT pr_fmt(fmt), ##__VA_ARGS__)
 
 #if defined(DEBUG)
 #define pr_devel_once(fmt, ...)					\
-	printk_once(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #else
 #define pr_devel_once(fmt, ...)					\
-	no_printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
 
 /* If you are writing a driver, please use dev_dbg instead */
 #if defined(DEBUG)
 #define pr_debug_once(fmt, ...)					\
-	printk_once(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_once(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #else
 #define pr_debug_once(fmt, ...)					\
-	no_printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
 
 /*
@@ -535,27 +434,27 @@ extern asmlinkage void dump_stack(void) __cold;
 #endif
 
 #define pr_emerg_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_EMERG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_EMERG pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_alert_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_ALERT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_ALERT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_crit_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_CRIT KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_CRIT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_err_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_ERR KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_ERR pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_warn_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_WARNING KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_WARNING pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_notice_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_NOTICE KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_info_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_INFO KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
 /* no pr_cont_ratelimited, don't do that... */
 
 #if defined(DEBUG)
 #define pr_devel_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #else
 #define pr_devel_ratelimited(fmt, ...)					\
-	no_printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
 
 /* If you are writing a driver, please use dev_dbg instead */
@@ -573,10 +472,10 @@ do {									\
 } while (0)
 #elif defined(DEBUG)
 #define pr_debug_ratelimited(fmt, ...)					\
-	printk_ratelimited(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	printk_ratelimited(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #else
 #define pr_debug_ratelimited(fmt, ...) \
-	no_printk(KERN_DEBUG KLOG_MODNAME pr_fmt(fmt), ##__VA_ARGS__)
+	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
 
 extern const struct file_operations kmsg_fops;

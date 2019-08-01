@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * (C) COPYRIGHT 2016 ARM Limited. All rights reserved.
  * Author: Brian Starkey <brian.starkey@arm.com>
@@ -10,9 +11,8 @@
 
 #ifndef __DRM_WRITEBACK_H__
 #define __DRM_WRITEBACK_H__
-/* #include <drm/drm_connector.h> */
-/* #include <drm/drm_encoder.h> */
-#include <drm/drm_crtc_helper.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_encoder.h>
 #include <linux/workqueue.h>
 
 struct drm_writeback_connector {
@@ -83,15 +83,17 @@ struct drm_writeback_job {
 	 * @cleanup_work:
 	 *
 	 * Used to allow drm_writeback_signal_completion to defer dropping the
-	 * framebuffer reference to a workqueue.
+	 * framebuffer reference to a workqueue
 	 */
 	struct work_struct cleanup_work;
+
 	/**
 	 * @list_entry:
 	 *
-	 * List item for the connector's @job_queue
+	 * List item for the writeback connector's @job_queue
 	 */
 	struct list_head list_entry;
+
 	/**
 	 * @fb:
 	 *
@@ -105,8 +107,14 @@ struct drm_writeback_job {
 	 *
 	 * Fence which will signal once the writeback has completed
 	 */
-	struct fence *out_fence;
+	struct dma_fence *out_fence;
 };
+
+static inline struct drm_writeback_connector *
+drm_connector_to_writeback(struct drm_connector *connector)
+{
+	return container_of(connector, struct drm_writeback_connector, base);
+}
 
 int drm_writeback_connector_init(struct drm_device *dev,
 				 struct drm_writeback_connector *wb_connector,
@@ -123,6 +131,6 @@ void
 drm_writeback_signal_completion(struct drm_writeback_connector *wb_connector,
 				int status);
 
-struct fence *
+struct dma_fence *
 drm_writeback_get_out_fence(struct drm_writeback_connector *wb_connector);
 #endif

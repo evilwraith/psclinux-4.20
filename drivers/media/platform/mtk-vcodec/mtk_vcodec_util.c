@@ -17,15 +17,11 @@
 
 #include "mtk_vcodec_drv.h"
 #include "mtk_vcodec_util.h"
-#include "mtk_vcu.h"
+#include "mtk_vpu.h"
 
 /* For encoder, this will enable logs in venc/*/
 bool mtk_vcodec_dbg;
 EXPORT_SYMBOL(mtk_vcodec_dbg);
-
-/* For vcodec performance measure */
-bool mtk_vcodec_perf;
-EXPORT_SYMBOL(mtk_vcodec_perf);
 
 /* The log level of v4l2 encoder or decoder driver.
  * That is, files under mtk-vcodec/.
@@ -53,20 +49,17 @@ int mtk_vcodec_mem_alloc(struct mtk_vcodec_ctx *data,
 	struct mtk_vcodec_ctx *ctx = (struct mtk_vcodec_ctx *)data;
 	struct device *dev = &ctx->dev->plat_dev->dev;
 
-	mem->va = dma_alloc_coherent(dev, size, &mem->dma_addr, GFP_KERNEL);
-
+	mem->va = dma_zalloc_coherent(dev, size, &mem->dma_addr, GFP_KERNEL);
 	if (!mem->va) {
 		mtk_v4l2_err("%s dma_alloc size=%ld failed!", dev_name(dev),
 			     size);
 		return -ENOMEM;
 	}
 
-	memset(mem->va, 0, size);
-
-	mtk_v4l2_debug(4, "[%d]  - va      = %p", ctx->id, mem->va);
-	mtk_v4l2_debug(4, "[%d]  - dma     = 0x%lx", ctx->id,
+	mtk_v4l2_debug(3, "[%d]  - va      = %p", ctx->id, mem->va);
+	mtk_v4l2_debug(3, "[%d]  - dma     = 0x%lx", ctx->id,
 		       (unsigned long)mem->dma_addr);
-	mtk_v4l2_debug(4, "[%d]    size = 0x%lx", ctx->id, size);
+	mtk_v4l2_debug(3, "[%d]    size = 0x%lx", ctx->id, size);
 
 	return 0;
 }
@@ -85,10 +78,10 @@ void mtk_vcodec_mem_free(struct mtk_vcodec_ctx *data,
 		return;
 	}
 
-	mtk_v4l2_debug(4, "[%d]  - va      = %p", ctx->id, mem->va);
-	mtk_v4l2_debug(4, "[%d]  - dma     = 0x%lx", ctx->id,
+	mtk_v4l2_debug(3, "[%d]  - va      = %p", ctx->id, mem->va);
+	mtk_v4l2_debug(3, "[%d]  - dma     = 0x%lx", ctx->id,
 		       (unsigned long)mem->dma_addr);
-	mtk_v4l2_debug(4, "[%d]    size = 0x%lx", ctx->id, size);
+	mtk_v4l2_debug(3, "[%d]    size = 0x%lx", ctx->id, size);
 
 	dma_free_coherent(dev, size, mem->va, mem->dma_addr);
 	mem->va = NULL;
@@ -119,3 +112,6 @@ struct mtk_vcodec_ctx *mtk_vcodec_get_curr_ctx(struct mtk_vcodec_dev *dev)
 	return ctx;
 }
 EXPORT_SYMBOL(mtk_vcodec_get_curr_ctx);
+
+MODULE_LICENSE("GPL v2");
+MODULE_DESCRIPTION("Mediatek video codec driver");

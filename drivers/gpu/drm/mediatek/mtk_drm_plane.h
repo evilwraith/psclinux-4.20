@@ -18,11 +18,6 @@
 #include <drm/drm_crtc.h>
 #include <linux/types.h>
 
-struct mtk_drm_plane {
-	struct drm_plane		base;
-	unsigned int			idx;
-};
-
 struct mtk_plane_pending_state {
 	bool				config;
 	bool				enable;
@@ -40,11 +35,6 @@ struct mtk_plane_state {
 	struct drm_plane_state		base;
 	struct mtk_plane_pending_state	pending;
 };
-
-static inline struct mtk_drm_plane *to_mtk_plane(struct drm_plane *plane)
-{
-	return container_of(plane, struct mtk_drm_plane, base);
-}
 
 static inline struct mtk_plane_state *
 to_mtk_plane_state(struct drm_plane_state *state)
