@@ -22,6 +22,10 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
 
 #include <linux/export.h>
@@ -102,7 +106,7 @@ static ssize_t fm_v4l2_fops_write(struct file *file, const char __user * buf,
 	return sizeof(rds);
 }
 
-static __poll_t fm_v4l2_fops_poll(struct file *file, struct poll_table_struct *pts)
+static u32 fm_v4l2_fops_poll(struct file *file, struct poll_table_struct *pts)
 {
 	int ret;
 	struct fmdev *fmdev;
@@ -112,7 +116,7 @@ static __poll_t fm_v4l2_fops_poll(struct file *file, struct poll_table_struct *p
 	ret = fmc_is_rds_data_available(fmdev, file, pts);
 	mutex_unlock(&fmdev->mutex);
 	if (ret < 0)
-		return EPOLLIN | EPOLLRDNORM;
+		return POLLIN | POLLRDNORM;
 
 	return 0;
 }
@@ -190,9 +194,9 @@ release_unlock:
 static int fm_v4l2_vidioc_querycap(struct file *file, void *priv,
 		struct v4l2_capability *capability)
 {
-	strscpy(capability->driver, FM_DRV_NAME, sizeof(capability->driver));
-	strscpy(capability->card, FM_DRV_CARD_SHORT_NAME,
-		sizeof(capability->card));
+	strlcpy(capability->driver, FM_DRV_NAME, sizeof(capability->driver));
+	strlcpy(capability->card, FM_DRV_CARD_SHORT_NAME,
+			sizeof(capability->card));
 	sprintf(capability->bus_info, "UART");
 	capability->device_caps = V4L2_CAP_HW_FREQ_SEEK | V4L2_CAP_TUNER |
 		V4L2_CAP_RADIO | V4L2_CAP_MODULATOR |
@@ -249,7 +253,7 @@ static int fm_v4l2_vidioc_g_audio(struct file *file, void *priv,
 		struct v4l2_audio *audio)
 {
 	memset(audio, 0, sizeof(*audio));
-	strscpy(audio->name, "Radio", sizeof(audio->name));
+	strcpy(audio->name, "Radio");
 	audio->capability = V4L2_AUDCAP_STEREO;
 
 	return 0;
@@ -293,7 +297,7 @@ static int fm_v4l2_vidioc_g_tuner(struct file *file, void *priv,
 	if (ret != 0)
 		return ret;
 
-	strscpy(tuner->name, "FM", sizeof(tuner->name));
+	strcpy(tuner->name, "FM");
 	tuner->type = V4L2_TUNER_RADIO;
 	/* Store rangelow and rangehigh freq in unit of 62.5 Hz */
 	tuner->rangelow = bottom_freq * 16;
@@ -509,7 +513,7 @@ static const struct v4l2_ioctl_ops fm_drv_ioctl_ops = {
 };
 
 /* V4L2 RADIO device parent structure */
-static const struct video_device fm_viddev_template = {
+static struct video_device fm_viddev_template = {
 	.fops = &fm_drv_fops,
 	.ioctl_ops = &fm_drv_ioctl_ops,
 	.name = FM_DRV_NAME,
@@ -531,8 +535,7 @@ int fm_v4l2_init_video_device(struct fmdev *fmdev, int radio_nr)
 	struct v4l2_ctrl *ctrl;
 	int ret;
 
-	strscpy(fmdev->v4l2_dev.name, FM_DRV_NAME,
-		sizeof(fmdev->v4l2_dev.name));
+	strlcpy(fmdev->v4l2_dev.name, FM_DRV_NAME, sizeof(fmdev->v4l2_dev.name));
 	ret = v4l2_device_register(NULL, &fmdev->v4l2_dev);
 	if (ret < 0)
 		return ret;

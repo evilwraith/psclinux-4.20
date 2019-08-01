@@ -65,23 +65,28 @@ static int unprotect_region(void)
 extern char __start___ex_table[];
 extern char __stop___ex_table[];
 
-struct extbl_entry {
-	int insn;
-	int fixup;
-};
+#if defined(__powerpc64__)
+#define UCONTEXT_NIA(UC)	(UC)->uc_mcontext.gp_regs[PT_NIP]
+#elif defined(__powerpc__)
+#define UCONTEXT_NIA(UC)	(UC)->uc_mcontext.uc_regs->gregs[PT_NIP]
+#else
+#error implement UCONTEXT_NIA
+#endif
+
+static int segv_error;
 
 static void segv_handler(int signr, siginfo_t *info, void *ptr)
 {
 	ucontext_t *uc = (ucontext_t *)ptr;
 	unsigned long addr = (unsigned long)info->si_addr;
 	unsigned long *ip = &UCONTEXT_NIA(uc);
-	struct extbl_entry *entry = (struct extbl_entry *)__start___ex_table;
+	unsigned long *ex_p = (unsigned long *)__start___ex_table;
 
-	while (entry < (struct extbl_entry *)__stop___ex_table) {
+	while (ex_p < (unsigned long *)__stop___ex_table) {
 		unsigned long insn, fixup;
 
-		insn  = (unsigned long)&entry->insn + entry->insn;
-		fixup = (unsigned long)&entry->fixup + entry->fixup;
+		insn = *ex_p++;
+		fixup = *ex_p++;
 
 		if (insn == *ip) {
 			*ip = fixup;
@@ -90,7 +95,7 @@ static void segv_handler(int signr, siginfo_t *info, void *ptr)
 	}
 
 	printf("No exception table match for NIA %lx ADDR %lx\n", *ip, addr);
-	abort();
+	segv_error++;
 }
 
 static void setup_segv_handler(void)
@@ -114,10 +119,8 @@ static int do_one_test(char *p, int page_offset)
 
 	got = load_unaligned_zeropad(p);
 
-	if (should != got) {
+	if (should != got)
 		printf("offset %u load_unaligned_zeropad returned 0x%lx, should be 0x%lx\n", page_offset, got, should);
-		return 1;
-	}
 
 	return 0;
 }
@@ -141,6 +144,8 @@ static int test_body(void)
 
 	for (i = 0; i < page_size; i++)
 		FAIL_IF(do_one_test(mem_region+i, i));
+
+	FAIL_IF(segv_error);
 
 	return 0;
 }

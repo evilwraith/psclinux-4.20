@@ -265,7 +265,8 @@ static void __init zynq_clk_setup(struct device_node *np)
 		pr_warn("ps_clk frequency not specified, using 33 MHz.\n");
 		tmp = 33333333;
 	}
-	ps_clk = clk_register_fixed_rate(NULL, "ps_clk", NULL, 0, tmp);
+	ps_clk = clk_register_fixed_rate(NULL, "ps_clk", NULL, CLK_IS_ROOT,
+			tmp);
 
 	/* PLLs */
 	clk = clk_register_zynq_pll("armpll_int", "ps_clk", SLCR_ARMPLL_CTRL,
@@ -602,7 +603,7 @@ void __init zynq_clock_init(void)
 	}
 
 	if (of_address_to_resource(np, 0, &res)) {
-		pr_err("%pOFn: failed to get resource\n", np);
+		pr_err("%s: failed to get resource\n", np->name);
 		goto np_err;
 	}
 
@@ -611,7 +612,7 @@ void __init zynq_clock_init(void)
 	if (slcr->data) {
 		zynq_clkc_base = (__force void __iomem *)slcr->data + res.start;
 	} else {
-		pr_err("%pOFn: Unable to get I/O memory\n", np);
+		pr_err("%s: Unable to get I/O memory\n", np->name);
 		of_node_put(slcr);
 		goto np_err;
 	}

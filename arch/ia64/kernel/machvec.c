@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/module.h>
 #include <linux/dma-mapping.h>
 #include <asm/machvec.h>
@@ -73,3 +72,19 @@ machvec_timer_interrupt (int irq, void *dev_id)
 {
 }
 EXPORT_SYMBOL(machvec_timer_interrupt);
+
+void
+machvec_dma_sync_single(struct device *hwdev, dma_addr_t dma_handle, size_t size,
+			enum dma_data_direction dir)
+{
+	mb();
+}
+EXPORT_SYMBOL(machvec_dma_sync_single);
+
+void
+machvec_dma_sync_sg(struct device *hwdev, struct scatterlist *sg, int n,
+		    enum dma_data_direction dir)
+{
+	mb();
+}
+EXPORT_SYMBOL(machvec_dma_sync_sg);

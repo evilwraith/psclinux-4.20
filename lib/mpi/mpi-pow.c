@@ -26,7 +26,6 @@
  *	 however I decided to publish this code under the plain GPL.
  */
 
-#include <linux/sched.h>
 #include <linux/string.h>
 #include "mpi-internal.h"
 #include "longlong.h"
@@ -41,7 +40,7 @@ int mpi_powm(MPI res, MPI base, MPI exp, MPI mod)
 	mpi_ptr_t tspace = NULL;
 	mpi_ptr_t rp, ep, mp, bp;
 	mpi_size_t esize, msize, bsize, rsize;
-	int msign, bsign, rsign;
+	int esign, msign, bsign, rsign;
 	mpi_size_t size;
 	int mod_shift_cnt;
 	int negative_result;
@@ -53,6 +52,7 @@ int mpi_powm(MPI res, MPI base, MPI exp, MPI mod)
 	esize = exp->nlimbs;
 	msize = mod->nlimbs;
 	size = 2 * msize;
+	esign = exp->sign;
 	msign = mod->sign;
 
 	rp = res->d;
@@ -64,13 +64,8 @@ int mpi_powm(MPI res, MPI base, MPI exp, MPI mod)
 	if (!esize) {
 		/* Exponent is zero, result is 1 mod MOD, i.e., 1 or 0
 		 * depending on if MOD equals 1.  */
+		rp[0] = 1;
 		res->nlimbs = (msize == 1 && mod->d[0] == 1) ? 0 : 1;
-		if (res->nlimbs) {
-			if (mpi_resize(res, 1) < 0)
-				goto enomem;
-			rp = res->d;
-			rp[0] = 1;
-		}
 		res->sign = 0;
 		goto leave;
 	}
@@ -256,7 +251,6 @@ int mpi_powm(MPI res, MPI base, MPI exp, MPI mod)
 				}
 				e <<= 1;
 				c--;
-				cond_resched();
 			}
 
 			i--;

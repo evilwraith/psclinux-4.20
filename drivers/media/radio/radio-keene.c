@@ -10,6 +10,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 /* kernel includes */
@@ -45,7 +49,7 @@ MODULE_LICENSE("GPL");
 #define FREQ_MUL 16000U
 
 /* USB Device ID List */
-static const struct usb_device_id usb_keene_device_table[] = {
+static struct usb_device_id usb_keene_device_table[] = {
 	{USB_DEVICE_AND_INTERFACE_INFO(USB_KEENE_VENDOR, USB_KEENE_PRODUCT,
 							USB_CLASS_HID, 0, 0) },
 	{ }						/* Terminating entry */
@@ -174,8 +178,8 @@ static int vidioc_querycap(struct file *file, void *priv,
 {
 	struct keene_device *radio = video_drvdata(file);
 
-	strscpy(v->driver, "radio-keene", sizeof(v->driver));
-	strscpy(v->card, "Keene FM Transmitter", sizeof(v->card));
+	strlcpy(v->driver, "radio-keene", sizeof(v->driver));
+	strlcpy(v->card, "Keene FM Transmitter", sizeof(v->card));
 	usb_make_path(radio->usbdev, v->bus_info, sizeof(v->bus_info));
 	v->device_caps = V4L2_CAP_RADIO | V4L2_CAP_MODULATOR;
 	v->capabilities = v->device_caps | V4L2_CAP_DEVICE_CAPS;
@@ -190,7 +194,7 @@ static int vidioc_g_modulator(struct file *file, void *priv,
 	if (v->index > 0)
 		return -EINVAL;
 
-	strscpy(v->name, "FM", sizeof(v->name));
+	strlcpy(v->name, "FM", sizeof(v->name));
 	v->rangelow = FREQ_MIN * FREQ_MUL;
 	v->rangehigh = FREQ_MAX * FREQ_MUL;
 	v->txsubchans = radio->stereo ? V4L2_TUNER_SUB_STEREO : V4L2_TUNER_SUB_MONO;
@@ -362,7 +366,7 @@ static int usb_keene_probe(struct usb_interface *intf,
 
 	radio->v4l2_dev.ctrl_handler = hdl;
 	radio->v4l2_dev.release = usb_keene_video_device_release;
-	strscpy(radio->vdev.name, radio->v4l2_dev.name,
+	strlcpy(radio->vdev.name, radio->v4l2_dev.name,
 		sizeof(radio->vdev.name));
 	radio->vdev.v4l2_dev = &radio->v4l2_dev;
 	radio->vdev.fops = &usb_keene_fops;

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _INET_ECN_H_
 #define _INET_ECN_H_
 
@@ -129,9 +128,13 @@ static inline int IP6_ECN_set_ce(struct sk_buff *skb, struct ipv6hdr *iph)
 	to = from | htonl(INET_ECN_CE << 20);
 	*(__be32 *)iph = to;
 	if (skb->ip_summed == CHECKSUM_COMPLETE)
-		skb->csum = csum_add(csum_sub(skb->csum, (__force __wsum)from),
-				     (__force __wsum)to);
+		skb->csum = csum_add(csum_sub(skb->csum, from), to);
 	return 1;
+}
+
+static inline void IP6_ECN_clear(struct ipv6hdr *iph)
+{
+	*(__be32*)iph &= ~htonl(INET_ECN_MASK << 20);
 }
 
 static inline void ipv6_copy_dscp(unsigned int dscp, struct ipv6hdr *inner)
@@ -183,7 +186,8 @@ static inline int INET_ECN_set_ce(struct sk_buff *skb)
  *          1 if something is broken and should be logged (!!! above)
  *          2 if packet should be dropped
  */
-static inline int __INET_ECN_decapsulate(__u8 outer, __u8 inner, bool *set_ce)
+static inline int INET_ECN_decapsulate(struct sk_buff *skb,
+				       __u8 outer, __u8 inner)
 {
 	if (INET_ECN_is_not_ect(inner)) {
 		switch (outer & INET_ECN_MASK) {
@@ -197,21 +201,10 @@ static inline int __INET_ECN_decapsulate(__u8 outer, __u8 inner, bool *set_ce)
 		}
 	}
 
-	*set_ce = INET_ECN_is_ce(outer);
-	return 0;
-}
-
-static inline int INET_ECN_decapsulate(struct sk_buff *skb,
-				       __u8 outer, __u8 inner)
-{
-	bool set_ce = false;
-	int rc;
-
-	rc = __INET_ECN_decapsulate(outer, inner, &set_ce);
-	if (!rc && set_ce)
+	if (INET_ECN_is_ce(outer))
 		INET_ECN_set_ce(skb);
 
-	return rc;
+	return 0;
 }
 
 static inline int IP_ECN_decapsulate(const struct iphdr *oiph,

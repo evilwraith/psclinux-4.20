@@ -24,10 +24,15 @@
 #include <media/videobuf2-core.h>
 #include "mtk_vcodec_util.h"
 
+#ifdef CONFIG_VB2_MEDIATEK_DMA_SG
+#include "mtkbuf-dma-cache-sg.h"
+#endif
+
 #define MTK_VCODEC_DRV_NAME	"mtk_vcodec_drv"
 #define MTK_VCODEC_DEC_NAME	"mtk-vcodec-dec"
 #define MTK_VCODEC_ENC_NAME	"mtk-vcodec-enc"
 #define MTK_PLATFORM_STR	"platform:mt8173"
+#define MTK_VCU_FW_VERSION	"0.2.14"
 
 #define MTK_VCODEC_MAX_PLANES	3
 #define MTK_V4L2_BENCHMARK	0
@@ -48,6 +53,7 @@ enum mtk_hw_reg_idx {
 	VDEC_HWD,
 	VDEC_HWQ,
 	VDEC_HWB,
+	VDEC_HD,
 	VDEC_HWG,
 	NUM_MAX_VDEC_REG_BASE,
 	/* h264 encoder */
@@ -140,6 +146,26 @@ struct mtk_q_data {
 	struct mtk_video_fmt	*fmt;
 };
 
+enum mtk_dec_param {
+	MTK_DEC_PARAM_NONE = 0,
+	MTK_DEC_PARAM_DECODE_MODE = (1 << 0),
+	MTK_DEC_PARAM_FRAME_SIZE = (1 << 1),
+	MTK_DEC_PARAM_FIXED_MAX_FRAME_SIZE = (1 << 2),
+	MTK_DEC_PARAM_CRC_PATH = (1 << 3),
+	MTK_DEC_PARAM_GOLDEN_PATH = (1 << 4)
+};
+
+struct mtk_dec_params {
+	unsigned int	decode_mode;
+	unsigned int	frame_size_width;
+	unsigned int	frame_size_height;
+	unsigned int	fixed_max_frame_size_width;
+	unsigned int	fixed_max_frame_size_height;
+	char		*crc_path;
+	char		*golden_path;
+	unsigned int	fb_num_planes;
+};
+
 /**
  * struct mtk_enc_params - General encoding parameters
  * @bitrate: target bitrate in bits per second
@@ -191,10 +217,12 @@ struct mtk_vcodec_pm {
 	struct clk	*venc_sel;
 	struct clk	*univpll1_d2;
 	struct clk	*venc_lt_sel;
+	struct clk	*img_resz;
 	struct device	*larbvdec;
 	struct device	*larbvenc;
 	struct device	*larbvenclt;
 	struct device	*dev;
+	struct device_node	*chip_node;
 	struct mtk_vcodec_dev	*mtkdev;
 };
 
@@ -204,12 +232,9 @@ struct mtk_vcodec_pm {
  * @pic_h: picture height
  * @buf_w: picture buffer width (64 aligned up from pic_w)
  * @buf_h: picture buffer heiht (64 aligned up from pic_h)
- * @y_bs_sz: Y bitstream size
- * @c_bs_sz: CbCr bitstream size
- * @y_len_sz: additional size required to store decompress information for y
- *		plane
- * @c_len_sz: additional size required to store decompress information for cbcr
- *		plane
+ * @fb_sz: frame buffer size
+ * @bitdepth: Sequence luma bitdepth
+ * @ufo_mode: mediatek block mode
  * E.g. suppose picture size is 176x144,
  *      buffer size will be aligned to 176x160.
  */
@@ -218,10 +243,9 @@ struct vdec_pic_info {
 	unsigned int pic_h;
 	unsigned int buf_w;
 	unsigned int buf_h;
-	unsigned int y_bs_sz;
-	unsigned int c_bs_sz;
-	unsigned int y_len_sz;
-	unsigned int c_len_sz;
+	unsigned int fb_sz[VIDEO_MAX_PLANES];
+	unsigned int bitdepth;
+	unsigned int ufo_mode;
 };
 
 /**
@@ -236,6 +260,8 @@ struct vdec_pic_info {
  *	    of the context
  * @id: index of the context that this structure describes
  * @state: state of the context
+ * @dec_param_change: indicate decode parameter type
+ * @dec_params: decoding parameters
  * @param_change: indicate encode parameter type
  * @enc_params: encoding parameters
  * @dec_if: hooked decoder driver interface
@@ -255,6 +281,8 @@ struct vdec_pic_info {
  * @encode_work: worker for the encoding
  * @last_decoded_picinfo: pic information get from latest decode
  * @empty_flush_buf: a fake size-0 capture buffer that indicates flush
+ * @oal_vcodec: 1: oal encoder, 0:non-oal encoder
+ * @pend_src_buf: pending source buffer
  *
  * @colorspace: enum v4l2_colorspace; supplemental to pixelformat
  * @ycbcr_enc: enum v4l2_ycbcr_encoding, Y'CbCr encoding
@@ -273,6 +301,8 @@ struct mtk_vcodec_ctx {
 	struct mtk_q_data q_data[2];
 	int id;
 	enum mtk_instance_state state;
+	enum mtk_dec_param dec_param_change;
+	struct mtk_dec_params dec_params;
 	enum mtk_encode_param param_change;
 	struct mtk_enc_params enc_params;
 
@@ -293,6 +323,8 @@ struct mtk_vcodec_ctx {
 	struct work_struct encode_work;
 	struct vdec_pic_info last_decoded_picinfo;
 	struct mtk_video_dec_buf *empty_flush_buf;
+	int oal_vcodec;
+	struct vb2_buffer *pend_src_buf;
 
 	enum v4l2_colorspace colorspace;
 	enum v4l2_ycbcr_encoding ycbcr_enc;
@@ -301,7 +333,6 @@ struct mtk_vcodec_ctx {
 
 	int decoded_frame_cnt;
 	struct mutex lock;
-
 };
 
 /**
@@ -313,7 +344,7 @@ struct mtk_vcodec_ctx {
  * @m2m_dev_dec: m2m device for decoder
  * @m2m_dev_enc: m2m device for encoder.
  * @plat_dev: platform device
- * @vpu_plat_dev: mtk vpu platform device
+ * @vcu_plat_dev: mtk vcu platform device
  * @ctx_list: list of struct mtk_vcodec_ctx
  * @irqlock: protect data access by irq handler and work thread
  * @curr_ctx: The context that is waiting for codec hardware
@@ -348,7 +379,8 @@ struct mtk_vcodec_dev {
 	struct v4l2_m2m_dev *m2m_dev_dec;
 	struct v4l2_m2m_dev *m2m_dev_enc;
 	struct platform_device *plat_dev;
-	struct platform_device *vpu_plat_dev;
+	struct platform_device *vcu_plat_dev;
+	struct vb2_alloc_ctx *alloc_ctx;
 	struct list_head ctx_list;
 	spinlock_t irqlock;
 	struct mtk_vcodec_ctx *curr_ctx;

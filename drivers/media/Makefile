@@ -1,10 +1,16 @@
-# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the kernel multimedia device drivers.
 #
 
-media-objs	:= media-device.o media-devnode.o media-entity.o \
-		   media-request.o
+ifeq ($(CONFIG_MEDIA_CEC_EDID),y)
+  obj-$(CONFIG_MEDIA_SUPPORT) += cec-edid.o
+endif
+
+ifeq ($(CONFIG_MEDIA_CEC_SUPPORT),y)
+  obj-$(CONFIG_MEDIA_SUPPORT) += cec/
+endif
+
+media-objs	:= media-device.o media-devnode.o media-entity.o
 
 #
 # I2C drivers should come before other drivers, otherwise they'll fail
@@ -26,12 +32,10 @@ obj-$(CONFIG_DVB_CORE)  += dvb-core/
 # There are both core and drivers at RC subtree - merge before drivers
 obj-y += rc/
 
-obj-$(CONFIG_CEC_CORE) += cec/
-
 #
 # Finally, merge the drivers that require the core
 #
 
-obj-y += common/ platform/ pci/ usb/ mmc/ firewire/ spi/
+obj-y += common/ platform/ pci/ usb/ mmc/ firewire/
 obj-$(CONFIG_VIDEO_DEV) += radio/
 

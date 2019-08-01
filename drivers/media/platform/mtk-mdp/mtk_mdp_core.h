@@ -22,6 +22,7 @@
 #include <media/v4l2-mem2mem.h>
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
+#include <linux/soc/mediatek/mtk-cmdq.h>
 
 #include "mtk_mdp_vpu.h"
 #include "mtk_mdp_comp.h"
@@ -95,6 +96,14 @@ struct mtk_mdp_ctrls {
 	struct v4l2_ctrl *hflip;
 	struct v4l2_ctrl *vflip;
 	struct v4l2_ctrl *global_alpha;
+	struct v4l2_ctrl *ctrl_sharpness_enable;
+	struct v4l2_ctrl *ctrl_sharpness_level;
+	struct v4l2_ctrl *ctrl_dynamic_contrast_enable;
+	struct v4l2_ctrl *ctrl_hor_blur_enable;
+	struct v4l2_ctrl *ctrl_ver_blur_enable;
+	struct v4l2_ctrl *ctrl_hor_blur_level;
+	struct v4l2_ctrl *ctrl_ver_blur_level;
+	struct v4l2_ctrl *eng_flag;
 };
 
 /**
@@ -146,8 +155,11 @@ struct mtk_mdp_variant {
  * @pdev:	pointer to the image processor platform device
  * @variant:	the IP variant information
  * @id:		image processor device index (0..MTK_MDP_MAX_DEVS)
+ * @driver:		driver name, e.g. "mtk-mdp", "mtk-mdp-1"
+ * @platform:		platform name, e.g. "platform:mt8173"
  * @comp:	MDP function components
  * @m2m_dev:	v4l2 memory-to-memory device data
+ * @alloc_ctx:	videobuf2 memory allocator context
  * @ctx_list:	list of struct mtk_mdp_ctx
  * @vdev:	video device for image processor driver
  * @v4l2_dev:	V4L2 device to register video devices for.
@@ -163,9 +175,12 @@ struct mtk_mdp_dev {
 	struct mutex			vpulock;
 	struct platform_device		*pdev;
 	struct mtk_mdp_variant		*variant;
-	u16				id;
+	int				id;
+	char				driver[16];
+	char				platform[32];
 	struct mtk_mdp_comp		*comp[MTK_MDP_COMP_ID_MAX];
 	struct v4l2_m2m_dev		*m2m_dev;
+	struct vb2_alloc_ctx		*alloc_ctx;
 	struct list_head		ctx_list;
 	struct video_device		*vdev;
 	struct v4l2_device		v4l2_dev;
@@ -175,6 +190,7 @@ struct mtk_mdp_dev {
 	unsigned long			id_counter;
 	struct workqueue_struct		*wdt_wq;
 	struct work_struct		wdt_work;
+	struct cmdq_client		*cmdq_client;
 };
 
 /**
@@ -213,6 +229,7 @@ struct mtk_mdp_ctx {
 	int				rotation;
 	u32				hflip:1;
 	u32				vflip:1;
+	u32				eng_flag;
 	struct mtk_mdp_dev		*mdp_dev;
 	struct v4l2_m2m_ctx		*m2m_ctx;
 	struct v4l2_fh			fh;
@@ -227,9 +244,14 @@ struct mtk_mdp_ctx {
 	struct mtk_mdp_vpu		vpu;
 	struct mutex			slock;
 	struct work_struct		work;
+	struct cmdq_pkt			*cmdq_handle;
+	struct mdp_pq_info              pq;
+	struct mdp_blur_info            blur;
 };
 
 extern int mtk_mdp_dbg_level;
+
+#define DEBUG	1
 
 #if defined(DEBUG)
 

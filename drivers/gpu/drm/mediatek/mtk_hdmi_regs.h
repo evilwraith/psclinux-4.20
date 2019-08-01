@@ -202,7 +202,28 @@
 #define NORMAL_PATH			(1 << 7)
 #define GEN_RGB				(0 << 7)
 
-#define HDMI_SYS_CFG1C		0x000
+#define HDCP_STATUS_RESET		0x398
+#define HDCP_STATUS_RESET0	(0x1 << 0)
+#define VSYNC_RESET_SELECT  (0x1 << 1)
+#define RG_N_DIV2			(0x1 << 2)
+#define RG_SPD_IIS_SEL		(0x1 << 3)
+
+#define MMSYS_CG_CON1   0x10
+#define DISP_PWM_MM_CG	         (0x1 << 0)
+#define DPI1_ENGINE_CLK_CG       (0x1 << 16)
+#define DPI1_ENGINE_CLK_CG_CLR   (0x0 << 16)
+#define DPI1_PIXEL_CLK_CG        (0x1 << 17)
+#define DPI1_PIXEL_CLK_CG_CLR    (0x0 << 17)
+#define HDMI_PIXEL_CLK_CG	 (0x1 << 18)
+#define HDMI_PIXEL_CLK_CG_CLR	 (0x0 << 18)
+#define HDMI_SPDIF_CLK_CG	 (0x1 << 19)
+#define HDMI_SPDIF_CLK_CG_CLR	 (0x0 << 19)
+#define HDMI_ADSP_BCK_CG	 (0x1 << 20)
+#define HDMI_ADSP_BCK_CG_CLR     (0x0 << 20)
+#define HDMI_PLL_CK_CG		 (0x1 << 21)
+#define HDMI_PLL_CK_CG_CLR	 (0x0 << 21)
+
+#define HDMI_SYS_CFG1C		0x800
 #define HDMI_ON				BIT(0)
 #define HDMI_RST			BIT(1)
 #define ANLG_ON				BIT(2)
@@ -218,7 +239,7 @@
 #define EXT_E2PROM_ON			BIT(29)
 #define HTPLG_PIN_SEL_OFF		BIT(30)
 #define AES_EFUSE_ENABLE		BIT(31)
-#define HDMI_SYS_CFG20		0x004
+#define HDMI_SYS_CFG20		0x804
 #define DEEP_COLOR_MODE_MASK		(3 << 1)
 #define COLOR_8BIT_MODE			(0 << 1)
 #define COLOR_10BIT_MODE		(1 << 1)
@@ -227,6 +248,7 @@
 #define DEEP_COLOR_EN			BIT(0)
 #define HDMI_AUDIO_TEST_SEL		BIT(8)
 #define HDMI2P0_EN			BIT(11)
+#define HDMI_PSECUR_EN			BIT(15)
 #define HDMI_OUT_FIFO_EN		BIT(16)
 #define HDMI_OUT_FIFO_CLK_INV		BIT(17)
 #define MHL_MODE_ON			BIT(28)

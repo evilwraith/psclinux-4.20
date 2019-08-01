@@ -221,6 +221,7 @@ struct at_xdmac {
 	int			irq;
 	struct clk		*clk;
 	u32			save_gim;
+	u32			save_gs;
 	struct dma_pool		*at_xdmac_desc_pool;
 	struct at_xdmac_chan	chan[0];
 };
@@ -443,8 +444,9 @@ static struct at_xdmac_desc *at_xdmac_alloc_desc(struct dma_chan *chan,
 	struct at_xdmac		*atxdmac = to_at_xdmac(chan->device);
 	dma_addr_t		phys;
 
-	desc = dma_pool_zalloc(atxdmac->at_xdmac_desc_pool, gfp_flags, &phys);
+	desc = dma_pool_alloc(atxdmac->at_xdmac_desc_pool, gfp_flags, &phys);
 	if (desc) {
+		memset(desc, 0, sizeof(*desc));
 		INIT_LIST_HEAD(&desc->descs_list);
 		dma_async_tx_descriptor_init(&desc->tx_dma_desc, chan);
 		desc->tx_dma_desc.tx_submit = at_xdmac_tx_submit;
@@ -454,7 +456,7 @@ static struct at_xdmac_desc *at_xdmac_alloc_desc(struct dma_chan *chan,
 	return desc;
 }
 
-static void at_xdmac_init_used_desc(struct at_xdmac_desc *desc)
+void at_xdmac_init_used_desc(struct at_xdmac_desc *desc)
 {
 	memset(&desc->lld, 0, sizeof(desc->lld));
 	INIT_LIST_HEAD(&desc->descs_list);
@@ -862,12 +864,8 @@ at_xdmac_interleaved_queue_desc(struct dma_chan *chan,
 	 * access. Hopefully we can access DDR through both ports (at least on
 	 * SAMA5D4x), so we can use the same interface for source and dest,
 	 * that solves the fact we don't know the direction.
-	 * ERRATA: Even if useless for memory transfers, the PERID has to not
-	 * match the one of another channel. If not, it could lead to spurious
-	 * flag status.
 	 */
-	u32			chan_cc = AT_XDMAC_CC_PERID(0x3f)
-					| AT_XDMAC_CC_DIF(0)
+	u32			chan_cc = AT_XDMAC_CC_DIF(0)
 					| AT_XDMAC_CC_SIF(0)
 					| AT_XDMAC_CC_MBSIZE_SIXTEEN
 					| AT_XDMAC_CC_TYPE_MEM_TRAN;
@@ -875,7 +873,7 @@ at_xdmac_interleaved_queue_desc(struct dma_chan *chan,
 	dwidth = at_xdmac_align_width(chan, src | dst | chunk->size);
 	if (chunk->size >= (AT_XDMAC_MBR_UBC_UBLEN_MAX << dwidth)) {
 		dev_dbg(chan2dev(chan),
-			"%s: chunk too big (%zu, max size %lu)...\n",
+			"%s: chunk too big (%d, max size %lu)...\n",
 			__func__, chunk->size,
 			AT_XDMAC_MBR_UBC_UBLEN_MAX << dwidth);
 		return NULL;
@@ -956,7 +954,7 @@ at_xdmac_prep_interleaved(struct dma_chan *chan,
 	if ((xt->numf > 1) && (xt->frame_size > 1))
 		return NULL;
 
-	dev_dbg(chan2dev(chan), "%s: src=%pad, dest=%pad, numf=%zu, frame_size=%zu, flags=0x%lx\n",
+	dev_dbg(chan2dev(chan), "%s: src=%pad, dest=%pad, numf=%d, frame_size=%d, flags=0x%lx\n",
 		__func__, &xt->src_start, &xt->dst_start,	xt->numf,
 		xt->frame_size, flags);
 
@@ -990,7 +988,7 @@ at_xdmac_prep_interleaved(struct dma_chan *chan,
 			dst_skip = chunk->size + dst_icg;
 
 			dev_dbg(chan2dev(chan),
-				"%s: chunk size=%zu, src icg=%zu, dst icg=%zu\n",
+				"%s: chunk size=%d, src icg=%d, dst icg=%d\n",
 				__func__, chunk->size, src_icg, dst_icg);
 
 			desc = at_xdmac_interleaved_queue_desc(chan, atchan,
@@ -1044,12 +1042,8 @@ at_xdmac_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dest, dma_addr_t src,
 	 * access DDR through both ports (at least on SAMA5D4x), so we can use
 	 * the same interface for source and dest, that solves the fact we
 	 * don't know the direction.
-	 * ERRATA: Even if useless for memory transfers, the PERID has to not
-	 * match the one of another channel. If not, it could lead to spurious
-	 * flag status.
 	 */
-	u32			chan_cc = AT_XDMAC_CC_PERID(0x3f)
-					| AT_XDMAC_CC_DAM_INCREMENTED_AM
+	u32			chan_cc = AT_XDMAC_CC_DAM_INCREMENTED_AM
 					| AT_XDMAC_CC_SAM_INCREMENTED_AM
 					| AT_XDMAC_CC_DIF(0)
 					| AT_XDMAC_CC_SIF(0)
@@ -1150,12 +1144,8 @@ static struct at_xdmac_desc *at_xdmac_memset_create_desc(struct dma_chan *chan,
 	 * access. Hopefully we can access DDR through both ports (at least on
 	 * SAMA5D4x), so we can use the same interface for source and dest,
 	 * that solves the fact we don't know the direction.
-	 * ERRATA: Even if useless for memory transfers, the PERID has to not
-	 * match the one of another channel. If not, it could lead to spurious
-	 * flag status.
 	 */
-	u32			chan_cc = AT_XDMAC_CC_PERID(0x3f)
-					| AT_XDMAC_CC_DAM_UBS_AM
+	u32			chan_cc = AT_XDMAC_CC_DAM_UBS_AM
 					| AT_XDMAC_CC_SAM_INCREMENTED_AM
 					| AT_XDMAC_CC_DIF(0)
 					| AT_XDMAC_CC_SIF(0)
@@ -1193,21 +1183,21 @@ static struct at_xdmac_desc *at_xdmac_memset_create_desc(struct dma_chan *chan,
 	desc->lld.mbr_cfg = chan_cc;
 
 	dev_dbg(chan2dev(chan),
-		"%s: lld: mbr_da=%pad, mbr_ds=0x%08x, mbr_ubc=0x%08x, mbr_cfg=0x%08x\n",
-		__func__, &desc->lld.mbr_da, desc->lld.mbr_ds, desc->lld.mbr_ubc,
+		"%s: lld: mbr_da=%pad, mbr_ds=%pad, mbr_ubc=0x%08x, mbr_cfg=0x%08x\n",
+		__func__, &desc->lld.mbr_da, &desc->lld.mbr_ds, desc->lld.mbr_ubc,
 		desc->lld.mbr_cfg);
 
 	return desc;
 }
 
-static struct dma_async_tx_descriptor *
+struct dma_async_tx_descriptor *
 at_xdmac_prep_dma_memset(struct dma_chan *chan, dma_addr_t dest, int value,
 			 size_t len, unsigned long flags)
 {
 	struct at_xdmac_chan	*atchan = to_at_xdmac_chan(chan);
 	struct at_xdmac_desc	*desc;
 
-	dev_dbg(chan2dev(chan), "%s: dest=%pad, len=%zu, pattern=0x%x, flags=0x%lx\n",
+	dev_dbg(chan2dev(chan), "%s: dest=%pad, len=%d, pattern=0x%x, flags=0x%lx\n",
 		__func__, &dest, len, value, flags);
 
 	if (unlikely(!len))
@@ -1471,9 +1461,9 @@ at_xdmac_tx_status(struct dma_chan *chan, dma_cookie_t cookie,
 	for (retry = 0; retry < AT_XDMAC_RESIDUE_MAX_RETRIES; retry++) {
 		check_nda = at_xdmac_chan_read(atchan, AT_XDMAC_CNDA) & 0xfffffffc;
 		rmb();
-		cur_ubc = at_xdmac_chan_read(atchan, AT_XDMAC_CUBC);
-		rmb();
 		initd = !!(at_xdmac_chan_read(atchan, AT_XDMAC_CC) & AT_XDMAC_CC_INITD);
+		rmb();
+		cur_ubc = at_xdmac_chan_read(atchan, AT_XDMAC_CUBC);
 		rmb();
 		cur_nda = at_xdmac_chan_read(atchan, AT_XDMAC_CNDA) & 0xfffffffc;
 		rmb();
@@ -1570,8 +1560,8 @@ static void at_xdmac_handle_cyclic(struct at_xdmac_chan *atchan)
 	desc = list_first_entry(&atchan->xfers_list, struct at_xdmac_desc, xfer_node);
 	txd = &desc->tx_dma_desc;
 
-	if (txd->flags & DMA_PREP_INTERRUPT)
-		dmaengine_desc_get_callback_invoke(txd, NULL);
+	if (txd->callback && (txd->flags & DMA_PREP_INTERRUPT))
+		txd->callback(txd->callback_param);
 }
 
 static void at_xdmac_tasklet(unsigned long data)
@@ -1600,7 +1590,7 @@ static void at_xdmac_tasklet(unsigned long data)
 		if (atchan->status & AT_XDMAC_CIS_ROIS)
 			dev_err(chan2dev(&atchan->chan), "request overflow error!!!");
 
-		spin_lock(&atchan->lock);
+		spin_lock_bh(&atchan->lock);
 		desc = list_first_entry(&atchan->xfers_list,
 					struct at_xdmac_desc,
 					xfer_node);
@@ -1610,12 +1600,12 @@ static void at_xdmac_tasklet(unsigned long data)
 		txd = &desc->tx_dma_desc;
 
 		at_xdmac_remove_xfer(atchan, desc);
-		spin_unlock(&atchan->lock);
+		spin_unlock_bh(&atchan->lock);
 
 		if (!at_xdmac_chan_is_cyclic(atchan)) {
 			dma_cookie_complete(txd);
-			if (txd->flags & DMA_PREP_INTERRUPT)
-				dmaengine_desc_get_callback_invoke(txd, NULL);
+			if (txd->callback && (txd->flags & DMA_PREP_INTERRUPT))
+				txd->callback(txd->callback_param);
 		}
 
 		dma_run_dependencies(txd);
@@ -1833,7 +1823,8 @@ static void at_xdmac_free_chan_resources(struct dma_chan *chan)
 #ifdef CONFIG_PM
 static int atmel_xdmac_prepare(struct device *dev)
 {
-	struct at_xdmac		*atxdmac = dev_get_drvdata(dev);
+	struct platform_device	*pdev = to_platform_device(dev);
+	struct at_xdmac		*atxdmac = platform_get_drvdata(pdev);
 	struct dma_chan		*chan, *_chan;
 
 	list_for_each_entry_safe(chan, _chan, &atxdmac->dma.channels, device_node) {
@@ -1852,7 +1843,8 @@ static int atmel_xdmac_prepare(struct device *dev)
 #ifdef CONFIG_PM_SLEEP
 static int atmel_xdmac_suspend(struct device *dev)
 {
-	struct at_xdmac		*atxdmac = dev_get_drvdata(dev);
+	struct platform_device	*pdev = to_platform_device(dev);
+	struct at_xdmac		*atxdmac = platform_get_drvdata(pdev);
 	struct dma_chan		*chan, *_chan;
 
 	list_for_each_entry_safe(chan, _chan, &atxdmac->dma.channels, device_node) {
@@ -1876,15 +1868,13 @@ static int atmel_xdmac_suspend(struct device *dev)
 
 static int atmel_xdmac_resume(struct device *dev)
 {
-	struct at_xdmac		*atxdmac = dev_get_drvdata(dev);
+	struct platform_device	*pdev = to_platform_device(dev);
+	struct at_xdmac		*atxdmac = platform_get_drvdata(pdev);
 	struct at_xdmac_chan	*atchan;
 	struct dma_chan		*chan, *_chan;
 	int			i;
-	int ret;
 
-	ret = clk_prepare_enable(atxdmac->clk);
-	if (ret)
-		return ret;
+	clk_prepare_enable(atxdmac->clk);
 
 	/* Clear pending interrupts. */
 	for (i = 0; i < atxdmac->dma.chancnt; i++) {
@@ -1894,6 +1884,7 @@ static int atmel_xdmac_resume(struct device *dev)
 	}
 
 	at_xdmac_write(atxdmac, AT_XDMAC_GIE, atxdmac->save_gim);
+	at_xdmac_write(atxdmac, AT_XDMAC_GE, atxdmac->save_gs);
 	list_for_each_entry_safe(chan, _chan, &atxdmac->dma.channels, device_node) {
 		atchan = to_at_xdmac_chan(chan);
 		at_xdmac_chan_write(atchan, AT_XDMAC_CC, atchan->save_cc);
@@ -2064,7 +2055,7 @@ err_dma_unregister:
 err_clk_disable:
 	clk_disable_unprepare(atxdmac->clk);
 err_free_irq:
-	free_irq(atxdmac->irq, atxdmac);
+	free_irq(atxdmac->irq, atxdmac->dma.dev);
 	return ret;
 }
 
@@ -2078,7 +2069,9 @@ static int at_xdmac_remove(struct platform_device *pdev)
 	dma_async_device_unregister(&atxdmac->dma);
 	clk_disable_unprepare(atxdmac->clk);
 
-	free_irq(atxdmac->irq, atxdmac);
+	synchronize_irq(atxdmac->irq);
+
+	free_irq(atxdmac->irq, atxdmac->dma.dev);
 
 	for (i = 0; i < atxdmac->dma.chancnt; i++) {
 		struct at_xdmac_chan *atchan = &atxdmac->chan[i];

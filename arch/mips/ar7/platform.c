@@ -19,6 +19,7 @@
 
 #include <linux/init.h>
 #include <linux/types.h>
+#include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
@@ -346,7 +347,7 @@ static struct platform_device ar7_udc = {
 /*****************************************************************************
  * LEDs
  ****************************************************************************/
-static const struct gpio_led default_leds[] = {
+static struct gpio_led default_leds[] = {
 	{
 		.name			= "status",
 		.gpio			= 8,
@@ -354,12 +355,12 @@ static const struct gpio_led default_leds[] = {
 	},
 };
 
-static const struct gpio_led titan_leds[] = {
+static struct gpio_led titan_leds[] = {
 	{ .name = "status", .gpio = 8, .active_low = 1, },
 	{ .name = "wifi", .gpio = 13, .active_low = 1, },
 };
 
-static const struct gpio_led dsl502t_leds[] = {
+static struct gpio_led dsl502t_leds[] = {
 	{
 		.name			= "status",
 		.gpio			= 9,
@@ -377,7 +378,7 @@ static const struct gpio_led dsl502t_leds[] = {
 	},
 };
 
-static const struct gpio_led dg834g_leds[] = {
+static struct gpio_led dg834g_leds[] = {
 	{
 		.name			= "ppp",
 		.gpio			= 6,
@@ -406,7 +407,7 @@ static const struct gpio_led dg834g_leds[] = {
 	},
 };
 
-static const struct gpio_led fb_sl_leds[] = {
+static struct gpio_led fb_sl_leds[] = {
 	{
 		.name			= "1",
 		.gpio			= 7,
@@ -433,7 +434,7 @@ static const struct gpio_led fb_sl_leds[] = {
 	},
 };
 
-static const struct gpio_led fb_fon_leds[] = {
+static struct gpio_led fb_fon_leds[] = {
 	{
 		.name			= "1",
 		.gpio			= 8,
@@ -459,7 +460,7 @@ static const struct gpio_led fb_fon_leds[] = {
 	},
 };
 
-static const struct gpio_led gt701_leds[] = {
+static struct gpio_led gt701_leds[] = {
 	{
 		.name			= "inet:green",
 		.gpio			= 13,
@@ -575,7 +576,6 @@ static int __init ar7_register_uarts(void)
 	uart_port.type		= PORT_AR7;
 	uart_port.uartclk	= clk_get_rate(bus_clk) / 2;
 	uart_port.iotype	= UPIO_MEM32;
-	uart_port.flags		= UPF_FIXED_TYPE | UPF_BOOT_AUTOCONF;
 	uart_port.regshift	= 2;
 
 	uart_port.line		= 0;
@@ -653,10 +653,6 @@ static int __init ar7_register_devices(void)
 	void __iomem *bootcr;
 	u32 val;
 	int res;
-
-	res = ar7_gpio_init();
-	if (res)
-		pr_warn("unable to register gpios: %d\n", res);
 
 	res = ar7_register_uarts();
 	if (res)

@@ -150,8 +150,6 @@ static const struct key_entry eeepc_keymap[] = {
 	{ KE_KEY, 0x32, { KEY_SWITCHVIDEOMODE } },
 	{ KE_KEY, 0x37, { KEY_F13 } }, /* Disable Touchpad */
 	{ KE_KEY, 0x38, { KEY_F14 } },
-	{ KE_IGNORE, 0x50, { KEY_RESERVED } }, /* AC plugged */
-	{ KE_IGNORE, 0x51, { KEY_RESERVED } }, /* AC unplugged */
 	{ KE_END, 0 },
 };
 
@@ -177,7 +175,7 @@ struct eeepc_laptop {
 	struct rfkill *wwan3g_rfkill;
 	struct rfkill *wimax_rfkill;
 
-	struct hotplug_slot hotplug_slot;
+	struct hotplug_slot *hotplug_slot;
 	struct mutex hotplug_lock;
 
 	struct led_classdev tpd_led;
@@ -445,7 +443,7 @@ static struct attribute *platform_attributes[] = {
 	NULL
 };
 
-static const struct attribute_group platform_attribute_group = {
+static struct attribute_group platform_attribute_group = {
 	.attrs = platform_attributes
 };
 
@@ -492,7 +490,7 @@ static void eeepc_platform_exit(struct eeepc_laptop *eeepc)
  * potentially bad time, such as a timer interrupt.
  */
 static void tpd_led_update(struct work_struct *work)
-{
+ {
 	struct eeepc_laptop *eeepc;
 
 	eeepc = container_of(work, struct eeepc_laptop, tpd_led_work);
@@ -582,7 +580,7 @@ static void eeepc_rfkill_hotplug(struct eeepc_laptop *eeepc, acpi_handle handle)
 	mutex_lock(&eeepc->hotplug_lock);
 	pci_lock_rescan_remove();
 
-	if (!eeepc->hotplug_slot.ops)
+	if (!eeepc->hotplug_slot)
 		goto out_unlock;
 
 	port = acpi_get_pci_dev(handle);
@@ -715,11 +713,8 @@ static void eeepc_unregister_rfkill_notifier(struct eeepc_laptop *eeepc,
 static int eeepc_get_adapter_status(struct hotplug_slot *hotplug_slot,
 				    u8 *value)
 {
-	struct eeepc_laptop *eeepc;
-	int val;
-
-	eeepc = container_of(hotplug_slot, struct eeepc_laptop, hotplug_slot);
-	val = get_acpi(eeepc, CM_ASL_WLAN);
+	struct eeepc_laptop *eeepc = hotplug_slot->private;
+	int val = get_acpi(eeepc, CM_ASL_WLAN);
 
 	if (val == 1 || val == 0)
 		*value = val;
@@ -729,7 +724,14 @@ static int eeepc_get_adapter_status(struct hotplug_slot *hotplug_slot,
 	return 0;
 }
 
-static const struct hotplug_slot_ops eeepc_hotplug_slot_ops = {
+static void eeepc_cleanup_pci_hotplug(struct hotplug_slot *hotplug_slot)
+{
+	kfree(hotplug_slot->info);
+	kfree(hotplug_slot);
+}
+
+static struct hotplug_slot_ops eeepc_hotplug_slot_ops = {
+	.owner = THIS_MODULE,
 	.get_adapter_status = eeepc_get_adapter_status,
 	.get_power_status = eeepc_get_adapter_status,
 };
@@ -744,9 +746,22 @@ static int eeepc_setup_pci_hotplug(struct eeepc_laptop *eeepc)
 		return -ENODEV;
 	}
 
-	eeepc->hotplug_slot.ops = &eeepc_hotplug_slot_ops;
+	eeepc->hotplug_slot = kzalloc(sizeof(struct hotplug_slot), GFP_KERNEL);
+	if (!eeepc->hotplug_slot)
+		goto error_slot;
 
-	ret = pci_hp_register(&eeepc->hotplug_slot, bus, 0, "eeepc-wifi");
+	eeepc->hotplug_slot->info = kzalloc(sizeof(struct hotplug_slot_info),
+					    GFP_KERNEL);
+	if (!eeepc->hotplug_slot->info)
+		goto error_info;
+
+	eeepc->hotplug_slot->private = eeepc;
+	eeepc->hotplug_slot->release = &eeepc_cleanup_pci_hotplug;
+	eeepc->hotplug_slot->ops = &eeepc_hotplug_slot_ops;
+	eeepc_get_adapter_status(eeepc->hotplug_slot,
+				 &eeepc->hotplug_slot->info->adapter_status);
+
+	ret = pci_hp_register(eeepc->hotplug_slot, bus, 0, "eeepc-wifi");
 	if (ret) {
 		pr_err("Unable to register hotplug slot - %d\n", ret);
 		goto error_register;
@@ -755,7 +770,11 @@ static int eeepc_setup_pci_hotplug(struct eeepc_laptop *eeepc)
 	return 0;
 
 error_register:
-	eeepc->hotplug_slot.ops = NULL;
+	kfree(eeepc->hotplug_slot->info);
+error_info:
+	kfree(eeepc->hotplug_slot);
+	eeepc->hotplug_slot = NULL;
+error_slot:
 	return ret;
 }
 
@@ -816,8 +835,8 @@ static void eeepc_rfkill_exit(struct eeepc_laptop *eeepc)
 		eeepc->wlan_rfkill = NULL;
 	}
 
-	if (eeepc->hotplug_slot.ops)
-		pci_hp_deregister(&eeepc->hotplug_slot);
+	if (eeepc->hotplug_slot)
+		pci_hp_deregister(eeepc->hotplug_slot);
 
 	if (eeepc->bluetooth_rfkill) {
 		rfkill_unregister(eeepc->bluetooth_rfkill);
@@ -1186,12 +1205,14 @@ static int eeepc_input_init(struct eeepc_laptop *eeepc)
 	error = input_register_device(input);
 	if (error) {
 		pr_err("Unable to register input device\n");
-		goto err_free_dev;
+		goto err_free_keymap;
 	}
 
 	eeepc->inputdev = input;
 	return 0;
 
+err_free_keymap:
+	sparse_keymap_free(input);
 err_free_dev:
 	input_free_device(input);
 	return error;
@@ -1199,8 +1220,10 @@ err_free_dev:
 
 static void eeepc_input_exit(struct eeepc_laptop *eeepc)
 {
-	if (eeepc->inputdev)
+	if (eeepc->inputdev) {
+		sparse_keymap_free(eeepc->inputdev);
 		input_unregister_device(eeepc->inputdev);
+	}
 	eeepc->inputdev = NULL;
 }
 

@@ -24,32 +24,35 @@
 
 #include "mtk_vcodec_enc.h"
 #include "mtk_vcodec_enc_pm.h"
-#include "mtk_vpu.h"
+#include "mtk_vcu.h"
 
-const struct venc_common_if *get_h264_enc_comm_if(void);
-const struct venc_common_if *get_vp8_enc_comm_if(void);
+const struct venc_common_if *get_enc_common_if(void);
 
 int venc_if_init(struct mtk_vcodec_ctx *ctx, unsigned int fourcc)
 {
 	int ret = 0;
 
+	ctx->oal_vcodec = 0;
+
 	switch (fourcc) {
-	case V4L2_PIX_FMT_VP8:
-		ctx->enc_if = get_vp8_enc_comm_if();
-		break;
 	case V4L2_PIX_FMT_H264:
-		ctx->enc_if = get_h264_enc_comm_if();
+		ctx->enc_if = get_enc_common_if();
+		ctx->oal_vcodec = 1;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	mtk_venc_lock(ctx);
-	mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	if (ctx->oal_vcodec == 0) {
+		mtk_venc_lock(ctx);
+		mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	}
 	ret = ctx->enc_if->init(ctx, (unsigned long *)&ctx->drv_handle);
-	mtk_vcodec_enc_clock_off(&ctx->dev->pm);
-	mtk_venc_unlock(ctx);
 
+	if (ctx->oal_vcodec == 0) {
+		mtk_vcodec_enc_clock_off(&ctx->dev->pm);
+		mtk_venc_unlock(ctx);
+	}
 	return ret;
 }
 
@@ -58,12 +61,16 @@ int venc_if_set_param(struct mtk_vcodec_ctx *ctx,
 {
 	int ret = 0;
 
-	mtk_venc_lock(ctx);
-	mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	if (ctx->oal_vcodec == 0) {
+		mtk_venc_lock(ctx);
+		mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	}
 	ret = ctx->enc_if->set_param(ctx->drv_handle, type, in);
-	mtk_vcodec_enc_clock_off(&ctx->dev->pm);
-	mtk_venc_unlock(ctx);
 
+	if (ctx->oal_vcodec == 0) {
+		mtk_vcodec_enc_clock_off(&ctx->dev->pm);
+		mtk_venc_unlock(ctx);
+	}
 	return ret;
 }
 
@@ -75,22 +82,23 @@ int venc_if_encode(struct mtk_vcodec_ctx *ctx,
 	int ret = 0;
 	unsigned long flags;
 
-	mtk_venc_lock(ctx);
-
-	spin_lock_irqsave(&ctx->dev->irqlock, flags);
-	ctx->dev->curr_ctx = ctx;
-	spin_unlock_irqrestore(&ctx->dev->irqlock, flags);
-
-	mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	if (ctx->oal_vcodec == 0) {
+		mtk_venc_lock(ctx);
+		spin_lock_irqsave(&ctx->dev->irqlock, flags);
+		ctx->dev->curr_ctx = ctx;
+		spin_unlock_irqrestore(&ctx->dev->irqlock, flags);
+		mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	}
 	ret = ctx->enc_if->encode(ctx->drv_handle, opt, frm_buf,
 				  bs_buf, result);
-	mtk_vcodec_enc_clock_off(&ctx->dev->pm);
 
-	spin_lock_irqsave(&ctx->dev->irqlock, flags);
-	ctx->dev->curr_ctx = NULL;
-	spin_unlock_irqrestore(&ctx->dev->irqlock, flags);
-
-	mtk_venc_unlock(ctx);
+	if (ctx->oal_vcodec == 0) {
+		mtk_vcodec_enc_clock_off(&ctx->dev->pm);
+		spin_lock_irqsave(&ctx->dev->irqlock, flags);
+		ctx->dev->curr_ctx = NULL;
+		spin_unlock_irqrestore(&ctx->dev->irqlock, flags);
+		mtk_venc_unlock(ctx);
+	}
 	return ret;
 }
 
@@ -101,12 +109,16 @@ int venc_if_deinit(struct mtk_vcodec_ctx *ctx)
 	if (ctx->drv_handle == 0)
 		return 0;
 
-	mtk_venc_lock(ctx);
-	mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	if (ctx->oal_vcodec == 0) {
+		mtk_venc_lock(ctx);
+		mtk_vcodec_enc_clock_on(&ctx->dev->pm);
+	}
 	ret = ctx->enc_if->deinit(ctx->drv_handle);
-	mtk_vcodec_enc_clock_off(&ctx->dev->pm);
-	mtk_venc_unlock(ctx);
 
+	if (ctx->oal_vcodec == 0) {
+		mtk_vcodec_enc_clock_off(&ctx->dev->pm);
+		mtk_venc_unlock(ctx);
+	}
 	ctx->drv_handle = 0;
 
 	return ret;

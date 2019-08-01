@@ -17,7 +17,7 @@
 #include <linux/utsname.h>
 #include <linux/initrd.h>
 #include <linux/console.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/seq_file.h>
 #include <linux/screen_info.h>
 #include <linux/init.h>
@@ -27,6 +27,7 @@
 #include <linux/smp.h>
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
+#include <linux/memblock.h>
 #include <linux/elf.h>
 #include <linux/io.h>
 
@@ -71,13 +72,13 @@ static struct resource mem_res[] = {
 		.name = "Kernel code",
 		.start = 0,
 		.end = 0,
-		.flags = IORESOURCE_SYSTEM_RAM
+		.flags = IORESOURCE_MEM
 	},
 	{
 		.name = "Kernel data",
 		.start = 0,
 		.end = 0,
-		.flags = IORESOURCE_SYSTEM_RAM
+		.flags = IORESOURCE_MEM
 	}
 };
 
@@ -206,11 +207,11 @@ request_standard_resources(struct meminfo *mi)
 		if (mi->bank[i].size == 0)
 			continue;
 
-		res = memblock_alloc_low(sizeof(*res), SMP_CACHE_BYTES);
+		res = alloc_bootmem_low(sizeof(*res));
 		res->name  = "System RAM";
 		res->start = mi->bank[i].start;
 		res->end   = mi->bank[i].start + mi->bank[i].size - 1;
-		res->flags = IORESOURCE_SYSTEM_RAM | IORESOURCE_BUSY;
+		res->flags = IORESOURCE_MEM | IORESOURCE_BUSY;
 
 		request_resource(&iomem_resource, res);
 

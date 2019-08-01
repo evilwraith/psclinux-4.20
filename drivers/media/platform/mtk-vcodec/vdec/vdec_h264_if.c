@@ -59,7 +59,6 @@ struct h264_fb {
  * @read_idx  : read index
  * @write_idx : write index
  * @count     : buffer count in list
- * @reserved  : for 8 bytes alignment
  */
 struct h264_ring_fb_list {
 	struct h264_fb fb_list[H264_MAX_FB_NUM];
@@ -494,10 +493,10 @@ static int vdec_h264_get_param(unsigned long h_vdec,
 }
 
 static struct vdec_common_if vdec_h264_if = {
-	.init		= vdec_h264_init,
-	.decode		= vdec_h264_decode,
-	.get_param	= vdec_h264_get_param,
-	.deinit		= vdec_h264_deinit,
+	vdec_h264_init,
+	vdec_h264_decode,
+	vdec_h264_get_param,
+	vdec_h264_deinit,
 };
 
 struct vdec_common_if *get_h264_dec_comm_if(void);

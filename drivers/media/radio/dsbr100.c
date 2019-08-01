@@ -28,6 +28,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 */
 
 #include <linux/kernel.h>
@@ -174,8 +178,8 @@ static int vidioc_querycap(struct file *file, void *priv,
 {
 	struct dsbr100_device *radio = video_drvdata(file);
 
-	strscpy(v->driver, "dsbr100", sizeof(v->driver));
-	strscpy(v->card, "D-Link R-100 USB FM Radio", sizeof(v->card));
+	strlcpy(v->driver, "dsbr100", sizeof(v->driver));
+	strlcpy(v->card, "D-Link R-100 USB FM Radio", sizeof(v->card));
 	usb_make_path(radio->usbdev, v->bus_info, sizeof(v->bus_info));
 	v->device_caps = V4L2_CAP_RADIO | V4L2_CAP_TUNER;
 	v->capabilities = v->device_caps | V4L2_CAP_DEVICE_CAPS;
@@ -191,7 +195,7 @@ static int vidioc_g_tuner(struct file *file, void *priv,
 		return -EINVAL;
 
 	dsbr100_getstat(radio);
-	strscpy(v->name, "FM", sizeof(v->name));
+	strcpy(v->name, "FM");
 	v->type = V4L2_TUNER_RADIO;
 	v->rangelow = FREQ_MIN * FREQ_MUL;
 	v->rangehigh = FREQ_MAX * FREQ_MUL;
@@ -379,8 +383,7 @@ static int usb_dsbr100_probe(struct usb_interface *intf,
 		goto err_reg_ctrl;
 	}
 	mutex_init(&radio->v4l2_lock);
-	strscpy(radio->videodev.name, v4l2_dev->name,
-		sizeof(radio->videodev.name));
+	strlcpy(radio->videodev.name, v4l2_dev->name, sizeof(radio->videodev.name));
 	radio->videodev.v4l2_dev = v4l2_dev;
 	radio->videodev.fops = &usb_dsbr100_fops;
 	radio->videodev.ioctl_ops = &usb_dsbr100_ioctl_ops;
@@ -409,7 +412,7 @@ err_reg_dev:
 	return retval;
 }
 
-static const struct usb_device_id usb_dsbr100_device_table[] = {
+static struct usb_device_id usb_dsbr100_device_table[] = {
 	{ USB_DEVICE(DSB100_VENDOR, DSB100_PRODUCT) },
 	{ }						/* Terminating entry */
 };

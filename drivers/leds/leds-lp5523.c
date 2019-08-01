@@ -31,6 +31,9 @@
 #include <linux/of.h>
 #include <linux/platform_data/leds-lp55xx.h>
 #include <linux/slab.h>
+#include <linux/fs.h>
+#include <linux/kthread.h>
+#include <linux/miscdevice.h>
 
 #include "leds-lp55xx-common.h"
 
@@ -121,6 +124,54 @@ enum lp5523_chip_id {
 	LP55231,
 };
 
+static struct i2c_client		*lp5523_i2c_client;
+static struct lp55xx_chip *lp5523_chip[4];
+static struct i2c_client * lp5523_client[4];
+static int lp5523_probe_nums = -1;
+static struct task_struct *led_task;
+static int led_task_flag = true;
+
+#define ALL_LED_RED     "000000111"
+#define ALL_LED_GREEN   "010101000"
+#define ALL_LED_BLUE    "101010000"
+#define ALL_LED_WHITE   "111111111"
+#define LOAD  "load"
+#define PATTERN_NAME  "9d80400004ff05ff437f0000"
+#define BITS  "101010000"
+#define RUN  "run"
+#define DISABLE  "disable"
+
+char color_string[10] = {0};
+
+#define LP5523_LED_ON (1)
+#define LP5523_LED_OFF (0)
+#define LP55231_LED_ALL_ON (0xa)
+#define LP55231_LED_ALL_OFF (0xb)
+
+#define FIRST_DEVICE (0x00)
+#define SECOND_DEVICE (0x01)
+#define THIRD_DEVICE (0x02)
+#define FOURTH_DEVICE (0x03)
+#define ALL_DEVICE (0x04)
+
+#define FISRT_DEVICE_STOP (0x5)
+#define SECOND_DEVICE_STOP   (0x6)
+#define THIRD_DEVICE_STOP  (0x7)
+#define FOURTH_DEVICE_STOP  (0x8)
+#define COLOR_RED  (0x0)
+#define COLOR_GREEN (0x1)
+#define COLOR_BLUE  (0x2)
+#define LED_ALL_COLOR (0x4)
+#define LED_STOP_ALL (0xff)
+
+#define LED_INDEX_FIRST (0)
+#define LED_INDEX_SECOND (1)
+#define LED_INDEX_THIRD (2)
+
+static u8 msb[4] = {0} ;
+static u8 lsb[4] = {0} ;
+
+
 static int lp5523_init_program_engine(struct lp55xx_chip *chip);
 
 static inline void lp5523_wait_opmode_done(void)
@@ -168,13 +219,13 @@ static int lp5523_post_init_device(struct lp55xx_chip *chip)
 static void lp5523_load_engine(struct lp55xx_chip *chip)
 {
 	enum lp55xx_engine_index idx = chip->engine_idx;
-	static const u8 mask[] = {
+	u8 mask[] = {
 		[LP55XX_ENGINE_1] = LP5523_MODE_ENG1_M,
 		[LP55XX_ENGINE_2] = LP5523_MODE_ENG2_M,
 		[LP55XX_ENGINE_3] = LP5523_MODE_ENG3_M,
 	};
 
-	static const u8 val[] = {
+	u8 val[] = {
 		[LP55XX_ENGINE_1] = LP5523_LOAD_ENG1,
 		[LP55XX_ENGINE_2] = LP5523_LOAD_ENG2,
 		[LP55XX_ENGINE_3] = LP5523_LOAD_ENG3,
@@ -188,7 +239,7 @@ static void lp5523_load_engine(struct lp55xx_chip *chip)
 static void lp5523_load_engine_and_select_page(struct lp55xx_chip *chip)
 {
 	enum lp55xx_engine_index idx = chip->engine_idx;
-	static const u8 page_sel[] = {
+	u8 page_sel[] = {
 		[LP55XX_ENGINE_1] = LP5523_PAGE_ENG1,
 		[LP55XX_ENGINE_2] = LP5523_PAGE_ENG2,
 		[LP55XX_ENGINE_3] = LP5523_PAGE_ENG3,
@@ -208,7 +259,7 @@ static void lp5523_stop_all_engines(struct lp55xx_chip *chip)
 static void lp5523_stop_engine(struct lp55xx_chip *chip)
 {
 	enum lp55xx_engine_index idx = chip->engine_idx;
-	static const u8 mask[] = {
+	u8 mask[] = {
 		[LP55XX_ENGINE_1] = LP5523_MODE_ENG1_M,
 		[LP55XX_ENGINE_2] = LP5523_MODE_ENG2_M,
 		[LP55XX_ENGINE_3] = LP5523_MODE_ENG3_M,
@@ -323,7 +374,7 @@ static int lp5523_init_program_engine(struct lp55xx_chip *chip)
 
 	if (status != LP5523_ENG_STATUS_MASK) {
 		dev_err(&chip->cl->dev,
-			"could not configure LED engine, status = 0x%.2x\n",
+			"cound not configure LED engine, status = 0x%.2x\n",
 			status);
 		ret = -1;
 	}
@@ -387,7 +438,7 @@ static void lp5523_firmware_loaded(struct lp55xx_chip *chip)
 	}
 
 	/*
-	 * Program memory sequence
+	 * Program momery sequence
 	 *  1) set engine mode to "LOAD"
 	 *  2) write firmware data into program memory
 	 */
@@ -505,7 +556,7 @@ static int lp5523_load_mux(struct lp55xx_chip *chip, u16 mux, int nr)
 {
 	struct lp55xx_engine *engine = &chip->engines[nr - 1];
 	int ret;
-	static const u8 mux_page[] = {
+	u8 mux_page[] = {
 		[LP55XX_ENGINE_1] = LP5523_PAGE_MUX1,
 		[LP55XX_ENGINE_2] = LP5523_PAGE_MUX2,
 		[LP55XX_ENGINE_3] = LP5523_PAGE_MUX3,
@@ -656,7 +707,7 @@ static ssize_t lp5523_selftest(struct device *dev,
 
 		/* Restore current */
 		lp55xx_write(chip, LP5523_REG_LED_CURRENT_BASE + i,
-			led->led_current);
+			led->led_current +  50);
 		led++;
 	}
 	if (pos == 0)
@@ -670,6 +721,456 @@ release_lock:
 
 	return pos;
 }
+
+static int lp5523_brightness_map(int brightness_value)
+{
+	int brightness_default = 0;
+
+	if (0 == brightness_value)
+	{
+		brightness_default = 100;
+	}
+	if (brightness_value > 100)
+	{
+		brightness_default = 0xff;
+	}
+
+	brightness_default = (brightness_value) * 0xff / 100;
+
+	return brightness_default;
+}
+
+static int lp5523_light_device_idx(int dev_idx, int color_idx, int brightness)
+{
+	u8 msb = 0, lsb = 0;
+	int i = 0;
+	struct lp55xx_chip *chip_index = NULL;
+	int brightness_val[4] = {0};
+
+	if (FIRST_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FIRST_DEVICE];
+		brightness_val[FIRST_DEVICE] = lp5523_brightness_map(brightness);
+	}
+	if (SECOND_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[SECOND_DEVICE];
+		brightness_val[SECOND_DEVICE] = lp5523_brightness_map(brightness);
+	}
+	 if (THIRD_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[THIRD_DEVICE];
+		brightness_val[THIRD_DEVICE] = lp5523_brightness_map(brightness);
+	}
+	if(FOURTH_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FOURTH_DEVICE];
+		brightness_val[FOURTH_DEVICE] = lp5523_brightness_map(brightness);
+	}
+
+	switch(color_idx)
+	{
+		case COLOR_GREEN:
+			msb = 0x00;
+			lsb = 0x2A;
+			break;
+		case COLOR_RED:
+			msb = 0x01;
+			lsb = 0xC0;
+			break;
+		case COLOR_BLUE:
+			msb = 0x00;
+			lsb = 0x15;
+	}
+
+	lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_MSB, msb);
+	lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb);
+    for (i = 0; i < LP5523_MAX_LEDS; i++)
+	{
+		lp55xx_write(chip_index, LP5523_REG_LED_CURRENT_BASE + i,0x20);
+		lp55xx_write(chip_index, LP5523_REG_LED_PWM_BASE + i, brightness_val[dev_idx]);
+	}
+	return 0;
+}
+
+static int lp5523_stop_device_idx(int dev_idx)
+{
+	int i = 0;
+	struct lp55xx_chip *chip_index = NULL;
+
+	if (FIRST_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FIRST_DEVICE];
+		msb[FIRST_DEVICE] = 0;
+		lsb[FIRST_DEVICE] = 0;
+	}
+	if (SECOND_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[SECOND_DEVICE];
+		msb[SECOND_DEVICE] = 0;
+		lsb[SECOND_DEVICE] = 0;
+	}
+	 if (THIRD_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[THIRD_DEVICE];
+		msb[THIRD_DEVICE] = 0;
+		lsb[THIRD_DEVICE] = 0;
+	}
+	if(FOURTH_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FOURTH_DEVICE];
+		msb[FOURTH_DEVICE] = 0;
+		lsb[FOURTH_DEVICE] = 0;
+	}
+    for (i = 0; i < LP5523_MAX_LEDS; i++)
+	{
+		lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_MSB , 0x00);
+		lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB , 0x00);
+	}
+	return 0;
+}
+
+static int lp5523_lsb_clean(struct lp55xx_chip *chip_index,int led_idx, int msb, int lsb)
+{
+	printk("### lp5523_lsb_clean led_idx=%d. msb=%d,lsb=%d\n\n",led_idx, msb, lsb);
+	switch(led_idx)
+	{
+	 case LED_INDEX_THIRD:
+	 	//if (0x00 == msb)
+	 	{
+			if (0x20 == (lsb & 0x20)) // 000001000  111110111
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB , lsb & 0xdf);
+			}
+			if (0x10 == (lsb & 0x10)) // 000010000  11110111
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb & 0xef);
+			}
+	 	}
+		//if (0x01 == msb)
+		{
+			if ( (0x01 == msb))  //000000001  111110111
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_MSB , 0x00);
+			}
+		}
+		break;
+	case LED_INDEX_SECOND:
+		//if (0x00 == msb)
+		{
+			if (0x08 == (lsb & 0x08)) // 00010000  11101111
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb & 0xf7);
+			}
+			if (0x80== (lsb & 0x80)) // 00000001 11111110
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb & 0x7f);
+			}
+			if (0x04 == (lsb & 0x04)) // 00100000  11011111
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb & 0xfb);
+			}
+		}
+		break;
+	case LED_INDEX_FIRST:
+		//if (0x00 == msb)
+		{
+			if (0x02 == (lsb & 0x02)) // 01000000  10111111
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb & 0xfd);
+			}
+			if (0x01 == (lsb & 0x01)) // 10000000  01111111
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb & 0xfe);
+			}
+			if (0x40 == (lsb & 0x40)) // 00000010  11111101
+			{
+				lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb & 0xbf);
+			}
+		}
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+
+static int lp5523_stop_led_idx(int dev_idx, int led_idx)
+{
+	u8  msb[4] = {0}, lsb[4] = {0};
+	struct lp55xx_chip *chip_index = NULL;
+
+	printk("### lp5523_stop_led_idx dev_idx=%d,led_idx=%d. \n",dev_idx, led_idx);
+	if (FIRST_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FIRST_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[FIRST_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[FIRST_DEVICE]);
+		lp5523_lsb_clean(chip_index, led_idx, msb[FIRST_DEVICE], lsb[FIRST_DEVICE]);
+	}
+	if (SECOND_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[SECOND_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[SECOND_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[SECOND_DEVICE]);
+		lp5523_lsb_clean(chip_index, led_idx, msb[SECOND_DEVICE], lsb[SECOND_DEVICE]);
+	}
+	 if (THIRD_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[THIRD_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[THIRD_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[THIRD_DEVICE]);
+		lp5523_lsb_clean(chip_index, led_idx, msb[THIRD_DEVICE], lsb[THIRD_DEVICE]);
+	}
+	if(FOURTH_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FOURTH_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[FOURTH_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[FOURTH_DEVICE]);
+		lp5523_lsb_clean(chip_index, led_idx, msb[FOURTH_DEVICE], lsb[FOURTH_DEVICE]);
+	}
+
+	return 0;
+}
+
+static int lp5523_msb_lsb_map(int led_idx,int color_idx, u8 msb, u8 lsb, u8 *msb_value, u8 *lsb_value)
+{
+	printk("### lp5523_msb_lsb_map msb = %d, lsb = %d\n\n",msb, lsb);
+	switch(color_idx)
+	{
+		 case COLOR_GREEN:
+		 	if (LED_INDEX_THIRD == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x20 | lsb;
+		 	}
+			if (LED_INDEX_SECOND == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x08 | lsb;
+		 	}
+			if (LED_INDEX_FIRST == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x02 | lsb;
+		 	}
+			break;
+		case COLOR_BLUE:
+		 	if (LED_INDEX_THIRD == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x10 | lsb;
+		 	}
+			if (LED_INDEX_SECOND == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x04 | lsb;
+		 	}
+			if (LED_INDEX_FIRST == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x01 | lsb;
+		 	}
+			break;
+		case COLOR_RED:
+		 	if (LED_INDEX_THIRD == led_idx)
+		 	{
+		 		msb = 0x01 | msb;
+				lsb = 0x00 | lsb;
+		 	}
+			if (LED_INDEX_SECOND == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x80 | lsb;
+		 	}
+			if (LED_INDEX_FIRST == led_idx)
+		 	{
+		 		msb = 0x00 | msb;
+				lsb = 0x40 | lsb;
+		 	}
+			break;
+	}
+
+	*msb_value = msb;
+	*lsb_value = lsb;
+	printk("### lp5523_msb_lsb_map *msb_value = %d, *lsb_value = %d\n\n",*msb_value, *lsb_value);
+	return 0;
+}
+
+static struct lp55xx_chip * lp5523_chipMap_ReadMsbLsb(int dev_idx, int brightness, int *bright_final)
+{
+	struct lp55xx_chip *chip_index = NULL;
+	int brightness_temp[4] = {0};
+
+	printk("### lp5523_chipMap_ReadMsbLsb dev_idex = %d\n\n", dev_idx);
+
+	if (FIRST_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FIRST_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[FIRST_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[FIRST_DEVICE]);
+		brightness_temp[FIRST_DEVICE] = lp5523_brightness_map(brightness);
+		printk("### lp5523_chipMap_ReadMsbLsb msb[0] = %d,lsb[0]:%d\n\n", msb[FIRST_DEVICE],lsb[FIRST_DEVICE]);
+	}
+	if (SECOND_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[SECOND_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[SECOND_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[SECOND_DEVICE]);
+		brightness_temp[SECOND_DEVICE] = lp5523_brightness_map(brightness);
+		printk("### lp5523_chipMap_ReadMsbLsb msb[0] = %d,lsb[0]:%d\n\n", msb[SECOND_DEVICE],lsb[SECOND_DEVICE]);
+	}
+	if (THIRD_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[THIRD_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[THIRD_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[THIRD_DEVICE]);
+		brightness_temp[THIRD_DEVICE] = lp5523_brightness_map(brightness);
+		printk("### lp5523_chipMap_ReadMsbLsb msb[0] = %d,lsb[0]:%d\n\n", msb[THIRD_DEVICE],lsb[THIRD_DEVICE]);
+	}
+	if(FOURTH_DEVICE == dev_idx)
+	{
+		chip_index = lp5523_chip[FOURTH_DEVICE];
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_MSB, &msb[FOURTH_DEVICE]);
+		lp55xx_read(chip_index, LP5523_REG_ENABLE_LEDS_LSB, &lsb[FOURTH_DEVICE]);
+		brightness_temp[FOURTH_DEVICE] = lp5523_brightness_map(brightness);
+		printk("### lp5523_chipMap_ReadMsbLsb msb[0] = %d,lsb[0]:%d\n\n", msb[FOURTH_DEVICE],lsb[FOURTH_DEVICE]);
+	}
+	*bright_final = brightness_temp[dev_idx];
+	printk("### lp5523_chipMap_ReadMsbLsb dev_idex = %d\n\n", dev_idx);
+	return chip_index;
+}
+
+
+static int lp5523_light_led_idx(int dev_idx, int color_idx, int led_idx, int bright_value)
+{
+	u8  msb_temp = 0, lsb_temp = 0, msb_w = 0, lsb_w = 0;
+	int i = 0;
+	struct lp55xx_chip *chip_index = NULL;
+	int bright_temp = 0;
+
+	chip_index = lp5523_chipMap_ReadMsbLsb(dev_idx,bright_value,&bright_temp);
+	switch(dev_idx)
+	{
+		case FIRST_DEVICE:
+			msb_temp = msb[FIRST_DEVICE];
+			lsb_temp = lsb[FIRST_DEVICE];
+			break;
+		case SECOND_DEVICE:
+			msb_temp = msb[SECOND_DEVICE];
+			lsb_temp = lsb[SECOND_DEVICE];
+			break;
+		case THIRD_DEVICE:
+			msb_temp = msb[THIRD_DEVICE];
+			lsb_temp = lsb[THIRD_DEVICE];
+			break;
+		case FOURTH_DEVICE:
+			msb_temp = msb[FOURTH_DEVICE];
+			lsb_temp = lsb[FOURTH_DEVICE];
+			break;
+		default:
+			break;
+	}
+
+	printk("### lp5523_light_led_idx msb_temp:%d, lsb_temp:%d\n", msb_temp,msb_temp);
+	lp5523_msb_lsb_map(led_idx,color_idx,msb_temp,lsb_temp, &msb_w, &lsb_w);
+	printk("### lp5523_light_led_idx msb_w:%d, lsb_w:%d, bright_temp=%d\n", msb_w,lsb_w,bright_temp);
+	lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_MSB, msb_w);
+	lp55xx_write(chip_index, LP5523_REG_ENABLE_LEDS_LSB, lsb_w);
+        for (i = 0; i < LP5523_MAX_LEDS; i++)
+	{
+		lp55xx_write(chip_index, LP5523_REG_LED_CURRENT_BASE + i,0x20);
+		lp55xx_write(chip_index, LP5523_REG_LED_PWM_BASE + i, bright_temp);
+	}
+	return 0;
+}
+
+
+static int lp5523_light(int device_index, int color_index, int led_idx,int singal_all_led, int brightness_value)
+{
+	int cor_idx = color_index;
+	
+	printk("#### lp5523_light device_index:%d, cor_idx:%d, led_idx=%d, brightness_value=%d\n\n",device_index,cor_idx, led_idx,brightness_value );
+	if (singal_all_led)
+	{
+		lp5523_light_device_idx(device_index,cor_idx,brightness_value);
+	}
+	else
+	{
+		lp5523_light_led_idx(device_index,cor_idx, led_idx,brightness_value);
+	}
+	return 0;
+}
+
+static int lp5523_stop(int device_index,int led_idx,int singal_all_led)
+{
+	if (singal_all_led)
+	{
+		lp5523_stop_device_idx(device_index);
+	}
+	else
+	{
+		lp5523_stop_led_idx(device_index, led_idx);
+	}
+	return 0;
+}
+
+static int lp5523_open(struct inode *inode, struct file *file)
+{
+	led_task_flag = false;
+	if (led_task)
+	{
+		kthread_stop(led_task);
+		led_task = NULL;
+	}
+    file->private_data = lp5523_i2c_client;
+	if (file->private_data == NULL)
+    {
+	    return 0;
+	}
+	return nonseekable_open(inode, file);
+}
+
+static int lp5523_release(struct inode *inode, struct file *file)
+{
+   file->private_data = NULL;
+        return 0;
+}
+
+static long lp5523_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	int device_idx = (arg & 0xf000) >> 12;
+	int color_index = (arg & 0x0f00) >> 8;
+	int led_idx = arg & 0xf;
+	int singal_all_led = (arg & 0xf0) >> 4;
+	int brightness_value = (arg & 0xff0000) >> 16;
+	
+	printk("### lp5523_ioctl cmd = %d, device_idx:%d, cloor_index=%d,led_idx=%d,singal_all_led=%d, brightness_value=%d\n\n",
+		cmd,device_idx, color_index,led_idx,singal_all_led,brightness_value);
+	
+	if (LP5523_LED_ON == cmd)
+	{
+		lp5523_light(device_idx,color_index,led_idx,singal_all_led,brightness_value);
+	}
+	else
+	{
+		lp5523_stop(device_idx,led_idx,singal_all_led);
+	}
+    return 0;
+}
+
+static const struct file_operations lp5523_fops = {
+	.owner    = THIS_MODULE,
+	.open     = lp5523_open,
+	.release  = lp5523_release,
+	.unlocked_ioctl = lp5523_ioctl,
+};
+
+static struct miscdevice lp5523_device = {
+    .minor = MISC_DYNAMIC_MINOR,
+    .name  = "ti-led",
+    .fops  = &lp5523_fops,
+};
 
 #define show_fader(nr)						\
 static ssize_t show_master_fader##nr(struct device *dev,	\
@@ -802,16 +1303,16 @@ leave:
 	return ret;
 }
 
-static int lp5523_led_brightness(struct lp55xx_led *led)
+static void lp5523_led_brightness_work(struct work_struct *work)
 {
+	struct lp55xx_led *led = container_of(work, struct lp55xx_led,
+					      brightness_work);
 	struct lp55xx_chip *chip = led->chip;
-	int ret;
 
 	mutex_lock(&chip->lock);
-	ret = lp55xx_write(chip, LP5523_REG_LED_PWM_BASE + led->chan_nr,
+	lp55xx_write(chip, LP5523_REG_LED_PWM_BASE + led->chan_nr,
 		     led->brightness);
 	mutex_unlock(&chip->lock);
-	return ret;
 }
 
 static LP55XX_DEV_ATTR_RW(engine1_mode, show_engine1_mode, store_engine1_mode);
@@ -867,12 +1368,35 @@ static struct lp55xx_device_config lp5523_cfg = {
 	},
 	.max_channel  = LP5523_MAX_LEDS,
 	.post_init_device   = lp5523_post_init_device,
-	.brightness_fn      = lp5523_led_brightness,
+	.brightness_work_fn = lp5523_led_brightness_work,
 	.set_led_current    = lp5523_set_led_current,
 	.firmware_cb        = lp5523_firmware_loaded,
 	.run_engine         = lp5523_run_engine,
 	.dev_attr_group     = &lp5523_group,
 };
+
+static int lp5523_led_thread(void *data)
+{
+	int i = 0 ;
+
+	for (i = 0; i < ALL_DEVICE; i++)
+	{
+		lp5523_stop_device_idx(i);
+	}
+	while(led_task_flag)
+	{
+		set_current_state(TASK_UNINTERRUPTIBLE);
+		if (kthread_should_stop())
+			break;
+		for (i = 0 ; i < ALL_DEVICE; i++)
+		{
+			lp5523_light_device_idx(i, COLOR_BLUE, 200);
+			usleep_range(200000, 200000);
+			lp5523_stop_device_idx(i);
+		}
+	}
+	return 0;
+}
 
 static int lp5523_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
@@ -882,6 +1406,7 @@ static int lp5523_probe(struct i2c_client *client,
 	struct lp55xx_led *led;
 	struct lp55xx_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct device_node *np = client->dev.of_node;
+	lp5523_probe_nums++;
 
 	if (!pdata) {
 		if (np) {
@@ -898,8 +1423,8 @@ static int lp5523_probe(struct i2c_client *client,
 	if (!chip)
 		return -ENOMEM;
 
-	led = devm_kcalloc(&client->dev,
-			pdata->num_channels, sizeof(*led), GFP_KERNEL);
+	led = devm_kzalloc(&client->dev,
+			sizeof(*led) * pdata->num_channels, GFP_KERNEL);
 	if (!led)
 		return -ENOMEM;
 
@@ -907,10 +1432,13 @@ static int lp5523_probe(struct i2c_client *client,
 	chip->pdata = pdata;
 	chip->cfg = &lp5523_cfg;
 
+	lp5523_client[lp5523_probe_nums] = client;
+	lp5523_chip[lp5523_probe_nums] = chip;
 	mutex_init(&chip->lock);
 
 	i2c_set_clientdata(client, led);
 
+    lp5523_i2c_client = client; //for ioctl 
 	ret = lp55xx_init_device(chip);
 	if (ret)
 		goto err_init;
@@ -920,6 +1448,8 @@ static int lp5523_probe(struct i2c_client *client,
 	ret = lp55xx_register_leds(led, chip);
 	if (ret)
 		goto err_register_leds;
+	lp55xx_write(chip, LP5523_REG_ENABLE_LEDS_MSB, 0);
+	lp55xx_write(chip, LP5523_REG_ENABLE_LEDS_LSB, 0);
 
 	ret = lp55xx_register_sysfs(chip);
 	if (ret) {
@@ -927,7 +1457,25 @@ static int lp5523_probe(struct i2c_client *client,
 		goto err_register_sysfs;
 	}
 
+    if (1 == lp5523_probe_nums ) //for ioctl
+    {
+	    ret = misc_register(&lp5523_device);
+	    if(ret)
+		{
+	        goto err_misc_deregister;
+	    }
+	}
+	if (3 == lp5523_probe_nums)
+	{
+		led_task = kthread_run(lp5523_led_thread, NULL, "LED_THREAD");
+		if (IS_ERR(led_task))
+		{
+			dev_err(&client->dev, "kthread_run failed\n");
+		}
+	}
 	return 0;
+err_misc_deregister:
+	misc_deregister(&lp5523_device);
 
 err_register_sysfs:
 	lp55xx_unregister_leds(led, chip);

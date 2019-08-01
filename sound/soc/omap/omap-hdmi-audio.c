@@ -26,9 +26,9 @@
 #include <sound/dmaengine_pcm.h>
 #include <uapi/sound/asound.h>
 #include <sound/asoundef.h>
+#include <sound/omap-pcm.h>
 #include <sound/omap-hdmi-audio.h>
-
-#include "sdma-pcm.h"
+#include <video/omapdss.h>
 
 #define DRV_NAME "omap-hdmi-audio"
 
@@ -338,22 +338,24 @@ static int omap_hdmi_audio_probe(struct platform_device *pdev)
 	ad->dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 	mutex_init(&ad->current_stream_lock);
 
-	switch (ha->version) {
-	case 4:
+	switch (ha->dss_version) {
+	case OMAPDSS_VER_OMAP4430_ES1:
+	case OMAPDSS_VER_OMAP4430_ES2:
+	case OMAPDSS_VER_OMAP4:
 		dai_drv = &omap4_hdmi_dai;
 		break;
-	case 5:
+	case OMAPDSS_VER_OMAP5:
 		dai_drv = &omap5_hdmi_dai;
 		break;
 	default:
 		return -EINVAL;
 	}
-	ret = devm_snd_soc_register_component(ad->dssdev, &omap_hdmi_component,
+	ret = snd_soc_register_component(ad->dssdev, &omap_hdmi_component,
 					 dai_drv, 1);
 	if (ret)
 		return ret;
 
-	ret = sdma_pcm_platform_register(ad->dssdev, "audio_tx", NULL);
+	ret = omap_pcm_platform_register(ad->dssdev);
 	if (ret)
 		return ret;
 
@@ -363,14 +365,9 @@ static int omap_hdmi_audio_probe(struct platform_device *pdev)
 
 	card->name = devm_kasprintf(dev, GFP_KERNEL,
 				    "HDMI %s", dev_name(ad->dssdev));
-	if (!card->name)
-		return -ENOMEM;
-
 	card->owner = THIS_MODULE;
 	card->dai_link =
 		devm_kzalloc(dev, sizeof(*(card->dai_link)), GFP_KERNEL);
-	if (!card->dai_link)
-		return -ENOMEM;
 	card->dai_link->name = card->name;
 	card->dai_link->stream_name = card->name;
 	card->dai_link->cpu_dai_name = dev_name(ad->dssdev);
@@ -383,6 +380,7 @@ static int omap_hdmi_audio_probe(struct platform_device *pdev)
 	ret = snd_soc_register_card(card);
 	if (ret) {
 		dev_err(dev, "snd_soc_register_card failed (%d)\n", ret);
+		snd_soc_unregister_component(ad->dssdev);
 		return ret;
 	}
 
@@ -399,6 +397,7 @@ static int omap_hdmi_audio_remove(struct platform_device *pdev)
 	struct hdmi_audio_data *ad = platform_get_drvdata(pdev);
 
 	snd_soc_unregister_card(ad->card);
+	snd_soc_unregister_component(ad->dssdev);
 	return 0;
 }
 

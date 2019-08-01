@@ -23,21 +23,80 @@
 #include "mtk_drm_fb.h"
 #include "mtk_drm_gem.h"
 #include "mtk_drm_plane.h"
+#include "mtk_drm_debugfs.h"
 
 static const u32 formats[] = {
 	DRM_FORMAT_XRGB8888,
 	DRM_FORMAT_ARGB8888,
 	DRM_FORMAT_RGB565,
-	DRM_FORMAT_UYVY,
-	DRM_FORMAT_YUYV,
 };
+
+static void mtk_plane_enable(struct mtk_drm_plane *mtk_plane, bool enable,
+			     dma_addr_t addr, struct drm_rect *dest)
+{
+	struct drm_plane *plane = &mtk_plane->base;
+	struct mtk_plane_state *state = to_mtk_plane_state(plane->state);
+	unsigned int pitch, format;
+	int x, y;
+
+	if (WARN_ON(!plane->state || (enable && !plane->state->fb))) {
+		MTK_DRM_ERROR(
+		plane->dev->dev,
+		"plane state 0x%p enable %d fb 0x%p\n",
+		plane->state, enable, plane->state->fb);
+		return;
+	}
+
+	MTK_DRM_DEBUG(
+		plane->dev->dev,
+		"plane enable %d fb 0x%p pixe_format 0x%x\n",
+		enable, plane->state->fb,
+		plane->state->fb?(plane->state->fb->pixel_format):0);
+
+	if (plane->state->fb) {
+		pitch = plane->state->fb->pitches[0];
+		format = plane->state->fb->pixel_format;
+	} else {
+		pitch = 0;
+		format = DRM_FORMAT_RGBA8888;
+	}
+
+	x = plane->state->crtc_x;
+	y = plane->state->crtc_y;
+
+	if (x < 0) {
+		addr -= x * 4;
+		x = 0;
+	}
+
+	if (y < 0) {
+		addr -= y * pitch;
+		y = 0;
+	}
+
+	state->pending.enable = enable;
+	state->pending.pitch = pitch;
+	state->pending.format = format;
+	state->pending.addr = addr;
+	state->pending.x = x;
+	state->pending.y = y;
+	state->pending.width = dest->x2 - dest->x1;
+	state->pending.height = dest->y2 - dest->y1;
+	wmb(); /* Make sure the above parameters are set before update */
+	state->pending.dirty = true;
+}
 
 static void mtk_plane_reset(struct drm_plane *plane)
 {
 	struct mtk_plane_state *state;
 
+	MTK_DRM_DEBUG(plane->dev->dev, "state %p fb %p\n",
+	plane->state,
+	plane->state?(plane->state->fb):0);
+
 	if (plane->state) {
-		__drm_atomic_helper_plane_destroy_state(plane->state);
+		if (plane->state->fb)
+			drm_framebuffer_unreference(plane->state->fb);
 
 		state = to_mtk_plane_state(plane->state);
 		memset(state, 0, sizeof(*state));
@@ -61,6 +120,7 @@ static struct drm_plane_state *mtk_plane_duplicate_state(struct drm_plane *plane
 	if (!state)
 		return NULL;
 
+	MTK_DRM_DEBUG_DRIVER("\n");
 	__drm_atomic_helper_plane_duplicate_state(plane, &state->base);
 
 	WARN_ON(state->base.plane != plane);
@@ -73,7 +133,8 @@ static struct drm_plane_state *mtk_plane_duplicate_state(struct drm_plane *plane
 static void mtk_drm_plane_destroy_state(struct drm_plane *plane,
 					struct drm_plane_state *state)
 {
-	__drm_atomic_helper_plane_destroy_state(state);
+	MTK_DRM_DEBUG_DRIVER("\n");
+	__drm_atomic_helper_plane_destroy_state(plane, state);
 	kfree(to_mtk_plane_state(state));
 }
 
@@ -91,56 +152,116 @@ static int mtk_plane_atomic_check(struct drm_plane *plane,
 {
 	struct drm_framebuffer *fb = state->fb;
 	struct drm_crtc_state *crtc_state;
+	bool visible;
+	int ret;
+	struct drm_rect dest = {
+		.x1 = state->crtc_x,
+		.y1 = state->crtc_y,
+		.x2 = state->crtc_x + state->crtc_w,
+		.y2 = state->crtc_y + state->crtc_h,
+	};
+	struct drm_rect src = {
+		/* 16.16 fixed point */
+		.x1 = state->src_x,
+		.y1 = state->src_y,
+		.x2 = state->src_x + state->src_w,
+		.y2 = state->src_y + state->src_h,
+	};
+	struct drm_rect clip = { 0, };
 
-	if (!fb)
+	if (!fb) {
+		MTK_DRM_ERROR(plane->dev->dev, "fb is null\n");
 		return 0;
+	}
 
-	if (!state->crtc)
+	if (!mtk_fb_get_gem_obj(fb)) {
+		DRM_DEBUG_KMS("buffer is null\n");
+		MTK_DRM_ERROR(plane->dev->dev, "buffer is null\n");
+		return -EFAULT;
+	}
+
+	if (!state->crtc) {
+		MTK_DRM_ERROR(plane->dev->dev, "crtc is null\n");
 		return 0;
+	}
 
 	crtc_state = drm_atomic_get_crtc_state(state->state, state->crtc);
-	if (IS_ERR(crtc_state))
+	if (IS_ERR(crtc_state)) {
+		MTK_DRM_ERROR(plane->dev->dev, "crtc_state is null\n");
 		return PTR_ERR(crtc_state);
+	}
 
-	return drm_atomic_helper_check_plane_state(state, crtc_state,
-						   DRM_PLANE_HELPER_NO_SCALING,
-						   DRM_PLANE_HELPER_NO_SCALING,
-						   true, true);
+	clip.x2 = crtc_state->mode.hdisplay;
+	clip.y2 = crtc_state->mode.vdisplay;
+
+	ret = drm_plane_helper_check_update(plane, state->crtc, fb,
+					     &src, &dest, &clip,
+#if !MTK_DRM_PLANE_SCALE_SUPPORT
+						 DRM_PLANE_HELPER_NO_SCALING,
+					     DRM_PLANE_HELPER_NO_SCALING,
+#else
+						 DRM_PLANE_HELPER_MIN_SCALING,
+					     DRM_PLANE_HELPER_MAX_SCALING,
+#endif
+					     true, true, &visible);
+
+	MTK_DRM_DEBUG_DRIVER("ret %d\n", ret);
+	return ret;
 }
 
 static void mtk_plane_atomic_update(struct drm_plane *plane,
 				    struct drm_plane_state *old_state)
 {
 	struct mtk_plane_state *state = to_mtk_plane_state(plane->state);
-	struct drm_crtc *crtc = plane->state->crtc;
-	struct drm_framebuffer *fb = plane->state->fb;
+	struct drm_crtc *crtc = state->base.crtc;
 	struct drm_gem_object *gem;
 	struct mtk_drm_gem_obj *mtk_gem;
-	unsigned int pitch, format;
-	dma_addr_t addr;
+	struct mtk_drm_plane *mtk_plane = to_mtk_plane(plane);
+	struct drm_rect src = {
+		.x1 = state->base.src_x/DRM_PLANE_HELPER_NO_SCALING,
+		.y1 = state->base.src_y/DRM_PLANE_HELPER_NO_SCALING,
+		.x2 = (state->base.src_x + state->base.src_w)/DRM_PLANE_HELPER_NO_SCALING,
+		.y2 = (state->base.src_y + state->base.src_h)/DRM_PLANE_HELPER_NO_SCALING,
+	};
+	struct drm_rect dest = {
+		.x1 = state->base.crtc_x,
+		.y1 = state->base.crtc_y,
+		.x2 = state->base.crtc_x + state->base.crtc_w,
+		.y2 = state->base.crtc_y + state->base.crtc_h,
+	};
+	struct drm_rect clip = { 0, };
 
-	if (!crtc || WARN_ON(!fb))
+	if (!crtc) {
+		MTK_DRM_ERROR(plane->dev->dev,
+		"crtc is invalid!\n");
 		return;
+	}
 
-	gem = fb->obj[0];
+	clip.x2 = state->base.crtc->state->mode.hdisplay;
+	clip.y2 = state->base.crtc->state->mode.vdisplay;
+	drm_rect_intersect(&src, &clip);
+	drm_rect_intersect(&dest, &clip);
+
+	gem = mtk_fb_get_gem_obj(state->base.fb);
 	mtk_gem = to_mtk_gem_obj(gem);
-	addr = mtk_gem->dma_addr;
-	pitch = fb->pitches[0];
-	format = fb->format->format;
 
-	addr += (plane->state->src.x1 >> 16) * fb->format->cpp[0];
-	addr += (plane->state->src.y1 >> 16) * pitch;
+	MTK_DRM_DEBUG_DRIVER(
+	"cookie 0x%p kvaddr 0x%p dma 0x%p src (%d %d %d %d) crtc (%d %d %d %d)\n",
+	mtk_gem->cookie, mtk_gem->kvaddr, (void *)mtk_gem->dma_addr,
+	state->base.src_x, state->base.src_y,
+	state->base.src_w, state->base.src_h,
+	state->base.crtc_x, state->base.crtc_y,
+	state->base.crtc_w, state->base.crtc_h);
 
-	state->pending.enable = true;
-	state->pending.pitch = pitch;
-	state->pending.format = format;
-	state->pending.addr = addr;
-	state->pending.x = plane->state->dst.x1;
-	state->pending.y = plane->state->dst.y1;
-	state->pending.width = drm_rect_width(&plane->state->dst);
-	state->pending.height = drm_rect_height(&plane->state->dst);
-	wmb(); /* Make sure the above parameters are set before update */
-	state->pending.dirty = true;
+#if MTK_DRM_PLANE_SCALE_SUPPORT
+	mtk_plane_enable(mtk_plane, true, mtk_gem->dma_addr, &src);
+#else
+	mtk_plane_enable(mtk_plane, true, mtk_gem->dma_addr, &dest);
+#endif
+
+#ifdef CONFIG_MTK_DISPLAY_CMDQ
+	mtk_drm_crtc_plane_update(crtc, plane, &state->pending);
+#endif
 }
 
 static void mtk_plane_atomic_disable(struct drm_plane *plane,
@@ -151,6 +272,13 @@ static void mtk_plane_atomic_disable(struct drm_plane *plane,
 	state->pending.enable = false;
 	wmb(); /* Make sure the above parameter is set before update */
 	state->pending.dirty = true;
+
+	MTK_DRM_DEBUG_DRIVER("\n");
+
+#ifdef CONFIG_MTK_DISPLAY_CMDQ
+	/* Fetch CRTC from old plane state when disabling. */
+	mtk_drm_crtc_plane_update(old_state->crtc, plane, &state->pending);
+#endif
 }
 
 static const struct drm_plane_helper_funcs mtk_plane_helper_funcs = {
@@ -164,9 +292,11 @@ int mtk_plane_init(struct drm_device *dev, struct drm_plane *plane,
 {
 	int err;
 
+	MTK_DRM_DEBUG_DRIVER("crtc 0x%x\n", possible_crtcs);
+
 	err = drm_universal_plane_init(dev, plane, possible_crtcs,
 				       &mtk_plane_funcs, formats,
-				       ARRAY_SIZE(formats), NULL, type, NULL);
+				       ARRAY_SIZE(formats), type, NULL);
 	if (err) {
 		DRM_ERROR("failed to initialize plane\n");
 		return err;

@@ -109,6 +109,7 @@ static struct shash_alg sha256_ssse3_algs[] = { {
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-ssse3",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -123,6 +124,7 @@ static struct shash_alg sha256_ssse3_algs[] = { {
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-ssse3",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -175,6 +177,7 @@ static struct shash_alg sha256_avx_algs[] = { {
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-avx",
 		.cra_priority	=	160,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -189,6 +192,7 @@ static struct shash_alg sha256_avx_algs[] = { {
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-avx",
 		.cra_priority	=	160,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -197,7 +201,7 @@ static struct shash_alg sha256_avx_algs[] = { {
 static bool avx_usable(void)
 {
 	if (!cpu_has_xfeatures(XFEATURE_MASK_SSE | XFEATURE_MASK_YMM, NULL)) {
-		if (boot_cpu_has(X86_FEATURE_AVX))
+		if (cpu_has_avx)
 			pr_info("AVX detected but unusable.\n");
 		return false;
 	}
@@ -257,6 +261,7 @@ static struct shash_alg sha256_avx2_algs[] = { {
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-avx2",
 		.cra_priority	=	170,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -271,6 +276,7 @@ static struct shash_alg sha256_avx2_algs[] = { {
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-avx2",
 		.cra_priority	=	170,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -337,6 +343,7 @@ static struct shash_alg sha256_ni_algs[] = { {
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-ni",
 		.cra_priority	=	250,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -351,6 +358,7 @@ static struct shash_alg sha256_ni_algs[] = { {
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-ni",
 		.cra_priority	=	250,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -419,14 +427,4 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SHA256 Secure Hash Algorithm, Supplemental SSE3 accelerated");
 
 MODULE_ALIAS_CRYPTO("sha256");
-MODULE_ALIAS_CRYPTO("sha256-ssse3");
-MODULE_ALIAS_CRYPTO("sha256-avx");
-MODULE_ALIAS_CRYPTO("sha256-avx2");
 MODULE_ALIAS_CRYPTO("sha224");
-MODULE_ALIAS_CRYPTO("sha224-ssse3");
-MODULE_ALIAS_CRYPTO("sha224-avx");
-MODULE_ALIAS_CRYPTO("sha224-avx2");
-#ifdef CONFIG_AS_SHA256_NI
-MODULE_ALIAS_CRYPTO("sha256-ni");
-MODULE_ALIAS_CRYPTO("sha224-ni");
-#endif

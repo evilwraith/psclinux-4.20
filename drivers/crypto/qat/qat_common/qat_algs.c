@@ -51,7 +51,6 @@
 #include <crypto/aes.h>
 #include <crypto/sha.h>
 #include <crypto/hash.h>
-#include <crypto/hmac.h>
 #include <crypto/algapi.h>
 #include <crypto/authenc.h>
 #include <linux/dma-mapping.h>
@@ -113,13 +112,6 @@ struct qat_alg_aead_ctx {
 	struct crypto_shash *hash_tfm;
 	enum icp_qat_hw_auth_algo qat_hash_alg;
 	struct qat_crypto_instance *inst;
-	union {
-		struct sha1_state sha1;
-		struct sha256_state sha256;
-		struct sha512_state sha512;
-	};
-	char ipad[SHA512_BLOCK_SIZE]; /* sufficient for SHA-1/SHA-256 as well */
-	char opad[SHA512_BLOCK_SIZE];
 };
 
 struct qat_alg_ablkcipher_ctx {
@@ -155,40 +147,45 @@ static int qat_alg_do_precomputes(struct icp_qat_hw_auth_algo_blk *hash,
 				  unsigned int auth_keylen)
 {
 	SHASH_DESC_ON_STACK(shash, ctx->hash_tfm);
+	struct sha1_state sha1;
+	struct sha256_state sha256;
+	struct sha512_state sha512;
 	int block_size = crypto_shash_blocksize(ctx->hash_tfm);
 	int digest_size = crypto_shash_digestsize(ctx->hash_tfm);
+	char ipad[block_size];
+	char opad[block_size];
 	__be32 *hash_state_out;
 	__be64 *hash512_state_out;
 	int i, offset;
 
-	memset(ctx->ipad, 0, block_size);
-	memset(ctx->opad, 0, block_size);
+	memset(ipad, 0, block_size);
+	memset(opad, 0, block_size);
 	shash->tfm = ctx->hash_tfm;
 	shash->flags = 0x0;
 
 	if (auth_keylen > block_size) {
 		int ret = crypto_shash_digest(shash, auth_key,
-					      auth_keylen, ctx->ipad);
+					      auth_keylen, ipad);
 		if (ret)
 			return ret;
 
-		memcpy(ctx->opad, ctx->ipad, digest_size);
+		memcpy(opad, ipad, digest_size);
 	} else {
-		memcpy(ctx->ipad, auth_key, auth_keylen);
-		memcpy(ctx->opad, auth_key, auth_keylen);
+		memcpy(ipad, auth_key, auth_keylen);
+		memcpy(opad, auth_key, auth_keylen);
 	}
 
 	for (i = 0; i < block_size; i++) {
-		char *ipad_ptr = ctx->ipad + i;
-		char *opad_ptr = ctx->opad + i;
-		*ipad_ptr ^= HMAC_IPAD_VALUE;
-		*opad_ptr ^= HMAC_OPAD_VALUE;
+		char *ipad_ptr = ipad + i;
+		char *opad_ptr = opad + i;
+		*ipad_ptr ^= 0x36;
+		*opad_ptr ^= 0x5C;
 	}
 
 	if (crypto_shash_init(shash))
 		return -EFAULT;
 
-	if (crypto_shash_update(shash, ctx->ipad, block_size))
+	if (crypto_shash_update(shash, ipad, block_size))
 		return -EFAULT;
 
 	hash_state_out = (__be32 *)hash->sha.state1;
@@ -196,22 +193,22 @@ static int qat_alg_do_precomputes(struct icp_qat_hw_auth_algo_blk *hash,
 
 	switch (ctx->qat_hash_alg) {
 	case ICP_QAT_HW_AUTH_ALGO_SHA1:
-		if (crypto_shash_export(shash, &ctx->sha1))
+		if (crypto_shash_export(shash, &sha1))
 			return -EFAULT;
 		for (i = 0; i < digest_size >> 2; i++, hash_state_out++)
-			*hash_state_out = cpu_to_be32(ctx->sha1.state[i]);
+			*hash_state_out = cpu_to_be32(*(sha1.state + i));
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_SHA256:
-		if (crypto_shash_export(shash, &ctx->sha256))
+		if (crypto_shash_export(shash, &sha256))
 			return -EFAULT;
 		for (i = 0; i < digest_size >> 2; i++, hash_state_out++)
-			*hash_state_out = cpu_to_be32(ctx->sha256.state[i]);
+			*hash_state_out = cpu_to_be32(*(sha256.state + i));
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_SHA512:
-		if (crypto_shash_export(shash, &ctx->sha512))
+		if (crypto_shash_export(shash, &sha512))
 			return -EFAULT;
 		for (i = 0; i < digest_size >> 3; i++, hash512_state_out++)
-			*hash512_state_out = cpu_to_be64(ctx->sha512.state[i]);
+			*hash512_state_out = cpu_to_be64(*(sha512.state + i));
 		break;
 	default:
 		return -EFAULT;
@@ -220,7 +217,7 @@ static int qat_alg_do_precomputes(struct icp_qat_hw_auth_algo_blk *hash,
 	if (crypto_shash_init(shash))
 		return -EFAULT;
 
-	if (crypto_shash_update(shash, ctx->opad, block_size))
+	if (crypto_shash_update(shash, opad, block_size))
 		return -EFAULT;
 
 	offset = round_up(qat_get_inter_state_size(ctx->qat_hash_alg), 8);
@@ -229,28 +226,28 @@ static int qat_alg_do_precomputes(struct icp_qat_hw_auth_algo_blk *hash,
 
 	switch (ctx->qat_hash_alg) {
 	case ICP_QAT_HW_AUTH_ALGO_SHA1:
-		if (crypto_shash_export(shash, &ctx->sha1))
+		if (crypto_shash_export(shash, &sha1))
 			return -EFAULT;
 		for (i = 0; i < digest_size >> 2; i++, hash_state_out++)
-			*hash_state_out = cpu_to_be32(ctx->sha1.state[i]);
+			*hash_state_out = cpu_to_be32(*(sha1.state + i));
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_SHA256:
-		if (crypto_shash_export(shash, &ctx->sha256))
+		if (crypto_shash_export(shash, &sha256))
 			return -EFAULT;
 		for (i = 0; i < digest_size >> 2; i++, hash_state_out++)
-			*hash_state_out = cpu_to_be32(ctx->sha256.state[i]);
+			*hash_state_out = cpu_to_be32(*(sha256.state + i));
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_SHA512:
-		if (crypto_shash_export(shash, &ctx->sha512))
+		if (crypto_shash_export(shash, &sha512))
 			return -EFAULT;
 		for (i = 0; i < digest_size >> 3; i++, hash512_state_out++)
-			*hash512_state_out = cpu_to_be64(ctx->sha512.state[i]);
+			*hash512_state_out = cpu_to_be64(*(sha512.state + i));
 		break;
 	default:
 		return -EFAULT;
 	}
-	memzero_explicit(ctx->ipad, block_size);
-	memzero_explicit(ctx->opad, block_size);
+	memzero_explicit(ipad, block_size);
+	memzero_explicit(opad, block_size);
 	return 0;
 }
 
@@ -548,14 +545,11 @@ static int qat_alg_aead_init_sessions(struct crypto_aead *tfm, const u8 *key,
 	if (qat_alg_aead_init_dec_session(tfm, alg, &keys, mode))
 		goto error;
 
-	memzero_explicit(&keys, sizeof(keys));
 	return 0;
 bad_key:
 	crypto_aead_set_flags(tfm, CRYPTO_TFM_RES_BAD_KEY_LEN);
-	memzero_explicit(&keys, sizeof(keys));
 	return -EINVAL;
 error:
-	memzero_explicit(&keys, sizeof(keys));
 	return -EFAULT;
 }
 
@@ -691,7 +685,7 @@ static int qat_alg_sgl_to_bufl(struct qat_crypto_instance *inst,
 
 	blp = dma_map_single(dev, bufl, sz, DMA_TO_DEVICE);
 	if (unlikely(dma_mapping_error(dev, blp)))
-		goto err_in;
+		goto err;
 
 	for_each_sg(sgl, sg, n, i) {
 		int y = sg_nctr;
@@ -704,7 +698,7 @@ static int qat_alg_sgl_to_bufl(struct qat_crypto_instance *inst,
 						      DMA_BIDIRECTIONAL);
 		bufl->bufers[y].len = sg->length;
 		if (unlikely(dma_mapping_error(dev, bufl->bufers[y].addr)))
-			goto err_in;
+			goto err;
 		sg_nctr++;
 	}
 	bufl->num_bufs = sg_nctr;
@@ -722,10 +716,10 @@ static int qat_alg_sgl_to_bufl(struct qat_crypto_instance *inst,
 		buflout = kzalloc_node(sz_out, GFP_ATOMIC,
 				       dev_to_node(&GET_DEV(inst->accel_dev)));
 		if (unlikely(!buflout))
-			goto err_in;
+			goto err;
 		bloutp = dma_map_single(dev, buflout, sz_out, DMA_TO_DEVICE);
 		if (unlikely(dma_mapping_error(dev, bloutp)))
-			goto err_out;
+			goto err;
 		bufers = buflout->bufers;
 		for_each_sg(sglout, sg, n, i) {
 			int y = sg_nctr;
@@ -737,7 +731,7 @@ static int qat_alg_sgl_to_bufl(struct qat_crypto_instance *inst,
 							sg->length,
 							DMA_BIDIRECTIONAL);
 			if (unlikely(dma_mapping_error(dev, bufers[y].addr)))
-				goto err_out;
+				goto err;
 			bufers[y].len = sg->length;
 			sg_nctr++;
 		}
@@ -752,20 +746,9 @@ static int qat_alg_sgl_to_bufl(struct qat_crypto_instance *inst,
 		qat_req->buf.sz_out = 0;
 	}
 	return 0;
-
-err_out:
-	n = sg_nents(sglout);
-	for (i = 0; i < n; i++)
-		if (!dma_mapping_error(dev, buflout->bufers[i].addr))
-			dma_unmap_single(dev, buflout->bufers[i].addr,
-					 buflout->bufers[i].len,
-					 DMA_BIDIRECTIONAL);
-	if (!dma_mapping_error(dev, bloutp))
-		dma_unmap_single(dev, bloutp, sz_out, DMA_TO_DEVICE);
-	kfree(buflout);
-
-err_in:
-	n = sg_nents(sgl);
+err:
+	dev_err(dev, "Failed to map buf for dma\n");
+	sg_nctr = 0;
 	for (i = 0; i < n; i++)
 		if (!dma_mapping_error(dev, bufl->bufers[i].addr))
 			dma_unmap_single(dev, bufl->bufers[i].addr,
@@ -775,8 +758,17 @@ err_in:
 	if (!dma_mapping_error(dev, blp))
 		dma_unmap_single(dev, blp, sz, DMA_TO_DEVICE);
 	kfree(bufl);
-
-	dev_err(dev, "Failed to map buf for dma\n");
+	if (sgl != sglout && buflout) {
+		n = sg_nents(sglout);
+		for (i = 0; i < n; i++)
+			if (!dma_mapping_error(dev, buflout->bufers[i].addr))
+				dma_unmap_single(dev, buflout->bufers[i].addr,
+						 buflout->bufers[i].len,
+						 DMA_BIDIRECTIONAL);
+		if (!dma_mapping_error(dev, bloutp))
+			dma_unmap_single(dev, bloutp, sz_out, DMA_TO_DEVICE);
+		kfree(buflout);
+	}
 	return -ENOMEM;
 }
 
@@ -955,13 +947,13 @@ static int qat_alg_ablkcipher_setkey(struct crypto_ablkcipher *tfm,
 	return 0;
 
 out_free_all:
-	memset(ctx->dec_cd, 0, sizeof(*ctx->dec_cd));
-	dma_free_coherent(dev, sizeof(*ctx->dec_cd),
+	memset(ctx->dec_cd, 0, sizeof(*ctx->enc_cd));
+	dma_free_coherent(dev, sizeof(*ctx->enc_cd),
 			  ctx->dec_cd, ctx->dec_cd_paddr);
 	ctx->dec_cd = NULL;
 out_free_enc:
-	memset(ctx->enc_cd, 0, sizeof(*ctx->enc_cd));
-	dma_free_coherent(dev, sizeof(*ctx->enc_cd),
+	memset(ctx->enc_cd, 0, sizeof(*ctx->dec_cd));
+	dma_free_coherent(dev, sizeof(*ctx->dec_cd),
 			  ctx->enc_cd, ctx->enc_cd_paddr);
 	ctx->enc_cd = NULL;
 	return -ENOMEM;
@@ -1072,7 +1064,8 @@ static int qat_alg_aead_init(struct crypto_aead *tfm,
 	if (IS_ERR(ctx->hash_tfm))
 		return PTR_ERR(ctx->hash_tfm);
 	ctx->qat_hash_alg = hash;
-	crypto_aead_set_reqsize(tfm, sizeof(struct qat_crypto_request));
+	crypto_aead_set_reqsize(tfm, sizeof(struct aead_request) +
+				     sizeof(struct qat_crypto_request));
 	return 0;
 }
 
@@ -1121,7 +1114,8 @@ static int qat_alg_ablkcipher_init(struct crypto_tfm *tfm)
 	struct qat_alg_ablkcipher_ctx *ctx = crypto_tfm_ctx(tfm);
 
 	spin_lock_init(&ctx->lock);
-	tfm->crt_ablkcipher.reqsize = sizeof(struct qat_crypto_request);
+	tfm->crt_ablkcipher.reqsize = sizeof(struct ablkcipher_request) +
+					sizeof(struct qat_crypto_request);
 	ctx->tfm = tfm;
 	return 0;
 }

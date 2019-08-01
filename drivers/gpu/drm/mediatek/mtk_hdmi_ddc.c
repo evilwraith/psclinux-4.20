@@ -308,8 +308,9 @@ static int mtk_hdmi_ddc_probe(struct platform_device *pdev)
 	ddc->adap.dev.of_node = dev->of_node;
 	ddc->adap.algo_data = ddc;
 	ddc->adap.dev.parent = &pdev->dev;
+	ddc->adap.nr = 3;
 
-	ret = i2c_add_adapter(&ddc->adap);
+	ret = i2c_add_numbered_adapter(&ddc->adap);
 	if (ret < 0) {
 		dev_err(dev, "failed to add bus to i2c core\n");
 		goto err_clk_disable;
@@ -344,12 +345,41 @@ static const struct of_device_id mtk_hdmi_ddc_match[] = {
 	{},
 };
 
+#ifdef CONFIG_PM_SLEEP
+static int mtk_ddc_suspend(struct device *dev)
+{
+	struct mtk_hdmi_ddc *ddc = dev_get_drvdata(dev);
+
+	clk_disable_unprepare(ddc->clk);
+
+	return 0;
+}
+
+static int mtk_ddc_resume(struct device *dev)
+{
+	struct mtk_hdmi_ddc *ddc = dev_get_drvdata(dev);
+	int ret = 0;
+
+	ret = clk_prepare_enable(ddc->clk);
+	if (ret) {
+		dev_err(dev, "hdmiddc resume failed!\n");
+		return ret;
+	}
+
+	return 0;
+}
+#endif
+
+static SIMPLE_DEV_PM_OPS(mtk_ddc_pm_ops,
+			 mtk_ddc_suspend, mtk_ddc_resume);
+
 struct platform_driver mtk_hdmi_ddc_driver = {
 	.probe = mtk_hdmi_ddc_probe,
 	.remove = mtk_hdmi_ddc_remove,
 	.driver = {
 		.name = "mediatek-hdmi-ddc",
 		.of_match_table = mtk_hdmi_ddc_match,
+		.pm = &mtk_ddc_pm_ops,
 	},
 };
 

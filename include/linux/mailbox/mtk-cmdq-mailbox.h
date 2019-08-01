@@ -1,7 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) 2018 MediaTek Inc.
+ * Copyright (c) 2015 MediaTek Inc.
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __MTK_CMDQ_MAILBOX_H__
@@ -40,21 +47,29 @@
  *   format: op irq_flag
  */
 enum cmdq_code {
+	CMDQ_CODE_READ  = 0x01,
 	CMDQ_CODE_MASK = 0x02,
 	CMDQ_CODE_WRITE = 0x04,
+	CMDQ_CODE_POLL  = 0x08,
 	CMDQ_CODE_JUMP = 0x10,
 	CMDQ_CODE_WFE = 0x20,
 	CMDQ_CODE_EOC = 0x40,
-};
 
-enum cmdq_cb_status {
-	CMDQ_CB_NORMAL = 0,
-	CMDQ_CB_ERROR
+	/* these are pseudo op code defined by SW */
+	/* for instruction generation */
+	CMDQ_CODE_WRITE_FROM_MEM = 0x05,
+	CMDQ_CODE_WRITE_FROM_REG = 0x07,
+	CMDQ_CODE_SET_TOKEN = 0x21,	/* set event */
+	CMDQ_CODE_WAIT_NO_CLEAR = 0x25,	/* wait event, but don't clear it */
+	CMDQ_CODE_CLEAR_TOKEN = 0x23,	/* clear event */
+	CMDQ_CODE_RAW = 0x24,	/* allow entirely custom arg_a/arg_b */
+	CMDQ_CODE_PREFETCH_ENABLE = 0x41,	/* enable prefetch marker */
+	CMDQ_CODE_PREFETCH_DISABLE = 0x42,	/* disable prefetch marker */
 };
 
 struct cmdq_cb_data {
-	enum cmdq_cb_status	sta;
-	void			*data;
+	bool	err;
+	void	*data;
 };
 
 typedef void (*cmdq_async_flush_cb)(struct cmdq_cb_data data);
@@ -66,12 +81,14 @@ struct cmdq_task_cb {
 
 struct cmdq_pkt {
 	void			*va_base;
-	dma_addr_t		pa_base;
 	size_t			cmd_buf_size; /* command occupied size */
 	size_t			buf_size; /* real buffer size */
 	struct cmdq_task_cb	cb;
-	struct cmdq_task_cb	async_cb;
-	void			*cl;
+};
+
+struct cmdq_priv {
+	void *priv;
+	u32 plat;
 };
 
 #endif /* __MTK_CMDQ_MAILBOX_H__ */
