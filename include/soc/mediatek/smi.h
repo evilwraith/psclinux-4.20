@@ -19,7 +19,7 @@
 
 #ifdef CONFIG_MTK_SMI
 
-#define MTK_LARB_NR_MAX		8
+#define MTK_LARB_NR_MAX		16
 
 #define MTK_SMI_MMU_EN(port)	BIT(port)
 
@@ -43,14 +43,6 @@ struct mtk_smi_iommu {
  */
 int mtk_smi_larb_get(struct device *larbdev);
 void mtk_smi_larb_put(struct device *larbdev);
-int mtk_smi_larb_clock_on(int larbid, bool pm);
-void mtk_smi_larb_clock_off(int larbid, bool pm);
-int mtk_smi_larb_ready(int larbid);
-
-#if defined(CONFIG_MTK_IN_HOUSE_TEE_SUPPORT) && defined(CONFIG_MTK_SEC_VIDEO_PATH_SUPPORT)
-#define M4U_TEE_SERVICE_ENABLE
-int pseudo_config_port_tee(int kernelport);
-#endif
 
 #else
 

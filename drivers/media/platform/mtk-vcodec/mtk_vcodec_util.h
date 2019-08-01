@@ -20,11 +20,9 @@
 #include <linux/dma-direction.h>
 
 struct mtk_vcodec_mem {
-	size_t length;
 	size_t size;
 	void *va;
 	dma_addr_t dma_addr;
-	struct dma_buf *dmabuf;
 };
 
 struct mtk_vcodec_ctx;
@@ -32,26 +30,28 @@ struct mtk_vcodec_dev;
 
 extern int mtk_v4l2_dbg_level;
 extern bool mtk_vcodec_dbg;
-extern bool mtk_vcodec_perf;
 
-#define DEBUG	1
-
-#if defined(DEBUG)
-
-#define mtk_v4l2_debug(level, fmt, args...)				 \
-	do {								 \
-		if ((mtk_v4l2_dbg_level & level) == level)			 \
-			pr_info("[MTK_V4L2] level=%d %s(),%d: " fmt "\n",\
-				level, __func__, __LINE__, ##args);	 \
-	} while (0)
 
 #define mtk_v4l2_err(fmt, args...)                \
 	pr_err("[MTK_V4L2][ERROR] %s:%d: " fmt "\n", __func__, __LINE__, \
 	       ##args)
 
+#define mtk_vcodec_err(h, fmt, args...)					\
+	pr_err("[MTK_VCODEC][ERROR][%d]: %s() " fmt "\n",		\
+	       ((struct mtk_vcodec_ctx *)h->ctx)->id, __func__, ##args)
 
-#define mtk_v4l2_debug_enter()  mtk_v4l2_debug(8, "+")
-#define mtk_v4l2_debug_leave()  mtk_v4l2_debug(8, "-")
+
+#if defined(DEBUG)
+
+#define mtk_v4l2_debug(level, fmt, args...)				 \
+	do {								 \
+		if (mtk_v4l2_dbg_level >= level)			 \
+			pr_info("[MTK_V4L2] level=%d %s(),%d: " fmt "\n",\
+				level, __func__, __LINE__, ##args);	 \
+	} while (0)
+
+#define mtk_v4l2_debug_enter()  mtk_v4l2_debug(3, "+")
+#define mtk_v4l2_debug_leave()  mtk_v4l2_debug(3, "-")
 
 #define mtk_vcodec_debug(h, fmt, args...)				\
 	do {								\
@@ -61,31 +61,18 @@ extern bool mtk_vcodec_perf;
 				__func__, ##args);			\
 	} while (0)
 
-#define mtk_vcodec_perf_log(fmt, args...)				\
-	do {								\
-		if (mtk_vcodec_perf)				\
-			pr_info("[MTK_PERF] " fmt "\n", ##args);	\
-	} while (0)
-
-
-#define mtk_vcodec_err(h, fmt, args...)					\
-	pr_err("[MTK_VCODEC][ERROR][%d]: %s() " fmt "\n",		\
-	       ((struct mtk_vcodec_ctx *)h->ctx)->id, __func__, ##args)
-
 #define mtk_vcodec_debug_enter(h)  mtk_vcodec_debug(h, "+")
 #define mtk_vcodec_debug_leave(h)  mtk_vcodec_debug(h, "-")
 
 #else
 
-#define mtk_v4l2_debug(level, fmt, args...)
-#define mtk_v4l2_err(fmt, args...)
-#define mtk_v4l2_debug_enter()
-#define mtk_v4l2_debug_leave()
+#define mtk_v4l2_debug(level, fmt, args...) {}
+#define mtk_v4l2_debug_enter() {}
+#define mtk_v4l2_debug_leave() {}
 
-#define mtk_vcodec_debug(h, fmt, args...)
-#define mtk_vcodec_err(h, fmt, args...)
-#define mtk_vcodec_debug_enter(h)
-#define mtk_vcodec_debug_leave(h)
+#define mtk_vcodec_debug(h, fmt, args...) {}
+#define mtk_vcodec_debug_enter(h) {}
+#define mtk_vcodec_debug_leave(h) {}
 
 #endif
 
